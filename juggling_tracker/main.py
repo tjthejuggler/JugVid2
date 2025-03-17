@@ -5,6 +5,8 @@ import time
 import cv2
 import numpy as np
 import argparse
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer
 
 # Add the parent directory to the path so we can import the modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,8 +18,7 @@ from juggling_tracker.modules.blob_detector import BlobDetector
 from juggling_tracker.modules.color_calibration import ColorCalibration
 from juggling_tracker.modules.ball_identifier import BallIdentifier
 from juggling_tracker.modules.multi_ball_tracker import MultiBallTracker
-from juggling_tracker.ui.visualizer import Visualizer
-from juggling_tracker.ui.ui_manager import UIManager
+from juggling_tracker.ui.main_window import MainWindow
 from juggling_tracker.extensions.extension_manager import ExtensionManager
 
 
@@ -158,7 +159,7 @@ class SimulationFrameAcquisition:
     Simulation frame acquisition class that generates random ball positions for testing.
     """
     
-    def __init__(self, width=640, height=480, fps=30, num_balls=3):
+    def __init__(self, width=320, height=240, fps=30, num_balls=3, simulation_speed=2.0):
         """
         Initialize the SimulationFrameAcquisition module.
         
@@ -167,11 +168,13 @@ class SimulationFrameAcquisition:
             height (int): Height of the simulated frames
             fps (int): Frames per second
             num_balls (int): Number of balls to simulate
+            simulation_speed (float): Speed multiplier for simulation (higher = faster)
         """
         self.width = width
         self.height = height
         self.fps = fps
         self.num_balls = num_balls
+        self.simulation_speed = simulation_speed
         self.balls = []
         self.frame_count = 0
         
@@ -238,11 +241,10 @@ class SimulationFrameAcquisition:
                 # Draw ball on color image
                 cv2.circle(color_image, (int(ball['x']), int(ball['y'])), ball['radius'], ball['color'], -1)
                 
-                # Draw ball on depth image
-                for y in range(max(0, int(ball['y']) - ball['radius']), min(self.height, int(ball['y']) + ball['radius'])):
-                    for x in range(max(0, int(ball['x']) - ball['radius']), min(self.width, int(ball['x']) + ball['radius'])):
-                        if (x - ball['x']) ** 2 + (y - ball['y']) ** 2 <= ball['radius'] ** 2:
-                            depth_image[y, x] = ball['z']
+                # Create a mask for the ball and use it to set depth values efficiently
+                ball_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+                cv2.circle(ball_mask, (int(ball['x']), int(ball['y'])), ball['radius'], 255, -1)
+                depth_image[ball_mask > 0] = ball['z']
             
             # Simulate hands
             hand_y = self.height - 50
@@ -253,23 +255,20 @@ class SimulationFrameAcquisition:
             cv2.circle(color_image, (left_hand_x, hand_y), 20, (0, 0, 255), -1)
             cv2.circle(color_image, (right_hand_x, hand_y), 20, (0, 255, 0), -1)
             
-            # Draw hands on depth image
-            for y in range(max(0, hand_y - 20), min(self.height, hand_y + 20)):
-                for x in range(max(0, left_hand_x - 20), min(self.width, left_hand_x + 20)):
-                    if (x - left_hand_x) ** 2 + (y - hand_y) ** 2 <= 20 ** 2:
-                        depth_image[y, x] = 800  # Hands are closer than balls
-                
-                for x in range(max(0, right_hand_x - 20), min(self.width, right_hand_x + 20)):
-                    if (x - right_hand_x) ** 2 + (y - hand_y) ** 2 <= 20 ** 2:
-                        depth_image[y, x] = 800  # Hands are closer than balls
+            # Create masks for hands and use them to set depth values efficiently
+            hand_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+            cv2.circle(hand_mask, (left_hand_x, hand_y), 20, 255, -1)
+            cv2.circle(hand_mask, (right_hand_x, hand_y), 20, 255, -1)
+            depth_image[hand_mask > 0] = 800  # Hands are closer than balls
             
             # Add frame count
             self.frame_count += 1
             cv2.putText(color_image, f"Frame: {self.frame_count}", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Add a small delay to simulate real-time
-            time.sleep(1 / self.fps)
+            # Add a small delay to simulate real-time, adjusted by simulation speed
+            if self.simulation_speed > 0:
+                time.sleep((1 / self.fps) / self.simulation_speed)
             
             return None, None, depth_image, color_image
         except Exception as e:
@@ -300,7 +299,6 @@ class SimulationFrameAcquisition:
         """
         pass
 
-
 class JugglingTracker:
     """
     Main application class for the Juggling Tracker.
@@ -308,7 +306,7 @@ class JugglingTracker:
     This class ties all the modules together and provides the main entry point for the application.
     """
     
-    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, camera_index=0):
+    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, camera_index=0, simulation_speed=2.0):
         """
         Initialize the JugglingTracker application.
         
@@ -318,6 +316,7 @@ class JugglingTracker:
             use_webcam (bool): Whether to use a webcam as fallback (default: False)
             use_simulation (bool): Whether to use simulation mode (default: False)
             camera_index (int): Index of the webcam to use (default: 0)
+            simulation_speed (float): Speed multiplier for simulation (higher = faster)
         """
         # Set up configuration directory
         self.config_dir = config_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config')
@@ -331,8 +330,12 @@ class JugglingTracker:
         
         # Set the frame acquisition module based on the specified mode
         if use_simulation:
-            print("Using simulation mode as specified.")
-            self.frame_acquisition = SimulationFrameAcquisition()
+            print("Using optimized simulation mode as specified.")
+            self.frame_acquisition = SimulationFrameAcquisition(
+                width=320,  # Lower resolution for better performance
+                height=240,
+                simulation_speed=simulation_speed
+            )
         elif use_webcam:
             print("Using webcam mode as specified.")
             self.frame_acquisition = WebcamFrameAcquisition(camera_index=camera_index)
@@ -351,11 +354,15 @@ class JugglingTracker:
         self.color_calibration = ColorCalibration(config_dir=self.config_dir)
         self.ball_identifier = BallIdentifier(self.color_calibration)
         self.ball_tracker = MultiBallTracker()
-        self.visualizer = Visualizer()
-        self.ui_manager = UIManager(self.visualizer.window_name, self.config_dir)
         
-        # Set the reference to this application in the UI manager
-        self.ui_manager.set_app(self)
+        # Create Qt application
+        self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        
+        # Load QSS stylesheet
+        self.load_stylesheet()
+        
+        # Create main window
+        self.main_window = MainWindow(self, self.config_dir)
         
         self.extension_manager = ExtensionManager()
         
@@ -366,8 +373,27 @@ class JugglingTracker:
         self.start_time = 0
         self.fps = 0
         
+        # Set up frame processing timer with faster rate for simulation mode
+        self.frame_timer = QTimer()
+        self.frame_timer.timeout.connect(self.process_frame)
+        
+        # Use a faster timer interval for simulation mode
+        if use_simulation:
+            self.frame_timer_interval = 16  # ~60 FPS target for simulation
+        else:
+            self.frame_timer_interval = 33  # ~30 FPS for real camera
+        
         # Load default extensions (but don't enable them)
         self.load_default_extensions()
+    
+    def load_stylesheet(self):
+        """
+        Load the QSS stylesheet.
+        """
+        qss_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ui', 'default.qss')
+        if os.path.exists(qss_path):
+            with open(qss_path, 'r') as f:
+                self.qt_app.setStyleSheet(f.read())
     
     def load_default_extensions(self):
         """
@@ -382,7 +408,7 @@ class JugglingTracker:
             # Note: We're not enabling extensions by default anymore
         
         # Update the UI
-        self.ui_manager.update_extensions_menu(self.extension_manager)
+        self.main_window.update_extensions_menu(self.extension_manager)
     
     def initialize(self):
         """
@@ -421,19 +447,15 @@ class JugglingTracker:
         self.running = True
         
         try:
-            while self.running:
-                # Process a frame
-                self.process_frame()
-                
-                # Handle user input
-                key = cv2.waitKey(1)
-                self.handle_key(key)
-                
-                # Check if the window was closed
-                if cv2.getWindowProperty(self.visualizer.window_name, cv2.WND_PROP_VISIBLE) < 1:
-                    print("Window closed by user.")
-                    self.running = False
-                    break
+            # Show the main window
+            self.main_window.show()
+            
+            # Start the frame processing timer with the appropriate interval
+            self.frame_timer.start(self.frame_timer_interval)
+            
+            # Run the Qt event loop
+            self.qt_app.exec()
+            
         except KeyboardInterrupt:
             print("Application interrupted by user.")
         except Exception as e:
@@ -446,7 +468,7 @@ class JugglingTracker:
         Process a single frame.
         """
         # Skip processing if paused
-        if self.paused:
+        if self.paused or not self.running:
             return
         
         # Get frames from the camera
@@ -455,97 +477,132 @@ class JugglingTracker:
         if depth_image is None or color_image is None:
             return
         
-        # Process the depth frame
-        depth_in_meters = self.depth_processor.process_depth_frame(depth_frame, depth_image, self.frame_acquisition.get_depth_scale())
+        # Check if we're in simulation mode for optimized processing
+        is_simulation_mode = isinstance(self.frame_acquisition, SimulationFrameAcquisition)
         
-        # Create a proximity mask
-        proximity_mask = self.depth_processor.create_proximity_mask(depth_in_meters)
-        proximity_mask = self.depth_processor.cleanup_mask(proximity_mask)
-        
-        # Detect the skeleton
-        pose_landmarks = self.skeleton_detector.detect_skeleton(color_image)
-        
-        # Get hand positions
-        hand_positions = self.skeleton_detector.get_hand_positions(pose_landmarks, color_image.shape)
-        
-        # Create a hand mask
-        hand_mask = self.skeleton_detector.create_hand_mask(hand_positions, color_image.shape)
-        
-        # Combine the proximity mask and hand mask
-        combined_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
-        
-        # Detect blobs in the combined mask
-        blobs = self.blob_detector.detect_blobs(combined_mask)
-        
-        # Filter blobs by depth variance
-        filtered_blobs = self.blob_detector.filter_blobs_by_depth_variance(blobs, depth_in_meters)
-        
-        # Identify balls
-        identified_balls = self.ball_identifier.identify_balls(filtered_blobs, color_image)
-        
-        # Get ball positions and depths
-        ball_positions = self.ball_identifier.get_ball_positions(identified_balls)
-        ball_depths = self.ball_identifier.get_ball_depths(identified_balls)
-        
-        # Update ball trackers
-        ball_3d_positions = self.ball_tracker.update_trackers(
-            identified_balls, 
-            ball_positions, 
-            ball_depths, 
-            self.frame_acquisition.get_intrinsics()
-        )
-        
-        # Get ball velocities
-        ball_velocities = self.ball_tracker.get_ball_velocities()
-        
-        # Prepare frame data for extensions
-        frame_data = {
-            'color_image': color_image,
-            'depth_image': depth_image,
-            'depth_in_meters': depth_in_meters,
-            'tracked_balls': self.ball_tracker.get_tracked_balls(),
-            'ball_positions': ball_3d_positions,
-            'ball_velocities': ball_velocities,
-            'hand_positions': hand_positions,
-            'timestamp': time.time()
-        }
-        
-        # Process the frame with extensions
-        extension_results = self.extension_manager.process_frame(frame_data)
-        
-        # Update calibration if in calibration mode
-        if self.ui_manager.is_calibrating() and filtered_blobs:
-            # Use the largest blob for calibration
-            largest_blob = max(filtered_blobs, key=lambda b: b['radius'])
-            self.ui_manager.update_calibration(largest_blob, color_image)
-        
-        # Prepare masks for visualization
-        masks = {
-            'Proximity': proximity_mask,
-            'Hands': hand_mask,
-            'Combined': combined_mask
-        }
-        
-        # Draw the UI
-        color_image = self.ui_manager.draw_ui(color_image)
-        
-        # Show the frame
-        self.visualizer.show_frame(
-            color_image=color_image,
-            depth_image=depth_image,
-            masks=masks if self.visualizer.show_masks else None,
-            identified_balls=identified_balls,
-            hand_positions=hand_positions,
-            extension_results=extension_results,
-            debug_info={
-                'Num Blobs': len(blobs),
-                'Num Filtered Blobs': len(filtered_blobs),
-                'Num Identified Balls': len(identified_balls),
-                'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()),
-                'Mode': 'RealSense' if isinstance(self.frame_acquisition, FrameAcquisition) else 
-                       ('Webcam' if isinstance(self.frame_acquisition, WebcamFrameAcquisition) else 'Simulation')
+        if is_simulation_mode:
+            # Simplified processing path for simulation mode
+            # Get simulated hand positions
+            hand_y = self.frame_acquisition.height - 50
+            left_hand_x = int(self.frame_acquisition.width / 4)
+            right_hand_x = int(3 * self.frame_acquisition.width / 4)
+            hand_positions = ((left_hand_x, hand_y), (right_hand_x, hand_y))
+            
+            # Create simplified identified balls directly from simulation data
+            identified_balls = []
+            for i, ball in enumerate(self.frame_acquisition.balls):
+                identified_balls.append({
+                    'name': f"Ball {i+1}",
+                    'position': (int(ball['x']), int(ball['y'])),
+                    'radius': ball['radius'],
+                    'color': ball['color'],
+                    'depth': ball['z'] * self.frame_acquisition.get_depth_scale(),
+                    'contour': None  # Not needed for visualization
+                })
+            
+            # Update the main window with the simulated data
+            self.main_window.update_frame(
+                color_image=color_image,
+                depth_image=depth_image,
+                masks=None,  # Skip mask visualization in simulation mode
+                identified_balls=identified_balls,
+                hand_positions=hand_positions,
+                extension_results=None,  # Skip extension processing in simulation mode
+                debug_info={
+                    'Num Identified Balls': len(identified_balls),
+                    'Mode': 'Simulation (Optimized)',
+                    'Simulation Speed': self.frame_acquisition.simulation_speed
+                }
+            )
+        else:
+            # Original processing path for real camera or webcam
+            # Process the depth frame
+            depth_in_meters = self.depth_processor.process_depth_frame(depth_frame, depth_image, self.frame_acquisition.get_depth_scale())
+            
+            # Create a proximity mask
+            proximity_mask = self.depth_processor.create_proximity_mask(depth_in_meters)
+            proximity_mask = self.depth_processor.cleanup_mask(proximity_mask)
+            
+            # Detect the skeleton
+            pose_landmarks = self.skeleton_detector.detect_skeleton(color_image)
+            
+            # Get hand positions
+            hand_positions = self.skeleton_detector.get_hand_positions(pose_landmarks, color_image.shape)
+            
+            # Create a hand mask
+            hand_mask = self.skeleton_detector.create_hand_mask(hand_positions, color_image.shape)
+            
+            # Combine the proximity mask and hand mask
+            combined_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
+            
+            # Detect blobs in the combined mask
+            blobs = self.blob_detector.detect_blobs(combined_mask)
+            
+            # Filter blobs by depth variance
+            filtered_blobs = self.blob_detector.filter_blobs_by_depth_variance(blobs, depth_in_meters)
+            
+            # Identify balls
+            identified_balls = self.ball_identifier.identify_balls(filtered_blobs, color_image)
+            
+            # Get ball positions and depths
+            ball_positions = self.ball_identifier.get_ball_positions(identified_balls)
+            ball_depths = self.ball_identifier.get_ball_depths(identified_balls)
+            
+            # Update ball trackers
+            ball_3d_positions = self.ball_tracker.update_trackers(
+                identified_balls,
+                ball_positions,
+                ball_depths,
+                self.frame_acquisition.get_intrinsics()
+            )
+            
+            # Get ball velocities
+            ball_velocities = self.ball_tracker.get_ball_velocities()
+            
+            # Prepare frame data for extensions
+            frame_data = {
+                'color_image': color_image,
+                'depth_image': depth_image,
+                'depth_in_meters': depth_in_meters,
+                'tracked_balls': self.ball_tracker.get_tracked_balls(),
+                'ball_positions': ball_3d_positions,
+                'ball_velocities': ball_velocities,
+                'hand_positions': hand_positions,
+                'timestamp': time.time()
             }
-        )
+            
+            # Process the frame with extensions
+            extension_results = self.extension_manager.process_frame(frame_data)
+            
+            # Update calibration if in calibration mode
+            if self.main_window.is_calibrating() and filtered_blobs:
+                # Use the largest blob for calibration
+                largest_blob = max(filtered_blobs, key=lambda b: b['radius'])
+                self.main_window.update_calibration(largest_blob, color_image)
+            
+            # Prepare masks for visualization
+            masks = {
+                'Proximity': proximity_mask,
+                'Hands': hand_mask,
+                'Combined': combined_mask
+            }
+            
+            # Update the main window with the frame
+            self.main_window.update_frame(
+                color_image=color_image,
+                depth_image=depth_image,
+                masks=masks if self.main_window.show_masks else None,
+                identified_balls=identified_balls,
+                hand_positions=hand_positions,
+                extension_results=extension_results,
+                debug_info={
+                    'Num Blobs': len(blobs),
+                    'Num Filtered Blobs': len(filtered_blobs),
+                    'Num Identified Balls': len(identified_balls),
+                    'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()),
+                    'Mode': 'RealSense' if isinstance(self.frame_acquisition, FrameAcquisition) else 'Webcam'
+                }
+            )
         
         # Update frame count and FPS
         self.frame_count += 1
@@ -553,61 +610,27 @@ class JugglingTracker:
         if elapsed_time > 0:
             self.fps = self.frame_count / elapsed_time
     
-    def handle_key(self, key):
-        """
-        Handle a key press.
-        
-        Args:
-            key (int): Key code
-        """
-        if key == -1:
-            return
-        
-        key = key & 0xFF
-        
-        if key == ord('q') or key == 27:  # q or ESC
-            self.running = False
-        elif key == ord('p'):  # p
-            self.paused = not self.paused
-        elif key == ord('d'):  # d
-            self.visualizer.toggle_debug_mode()
-        elif key == ord('m'):  # m
-            self.visualizer.toggle_masks_view()
-        elif key == ord('v'):  # v
-            self.visualizer.toggle_depth_view()
-        elif key == ord('f'):  # f
-            self.visualizer.toggle_fps_display()
-        elif key == ord('e'):  # e
-            self.visualizer.toggle_extension_results()
-        elif key == ord('r'):  # r
-            # Reset the application
-            self.ball_tracker.reset()
-            self.frame_count = 0
-            self.start_time = time.time()
-    
     def cleanup(self):
         """
         Clean up resources.
         """
         try:
+            # Stop the frame timer
+            self.frame_timer.stop()
+            
             # Stop the camera
             if self.frame_acquisition:
                 self.frame_acquisition.stop()
-            
-            # Clean up the visualizer
-            if self.visualizer:
-                self.visualizer.cleanup()
-            
-            # Clean up the UI manager
-            if self.ui_manager:
-                self.ui_manager.cleanup()
             
             # Clean up the extension manager
             if self.extension_manager:
                 self.extension_manager.cleanup()
             
-            # Close all OpenCV windows
-            cv2.destroyAllWindows()
+            # Close the main window
+            self.main_window.close()
+            
+            # Exit the Qt application
+            self.qt_app.quit()
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
@@ -625,6 +648,8 @@ def parse_args():
     parser.add_argument('--webcam', action='store_true', help='Use webcam instead of RealSense')
     parser.add_argument('--simulation', action='store_true', help='Use simulation mode')
     parser.add_argument('--camera-index', type=int, default=0, help='Index of the webcam to use')
+    parser.add_argument('--simulation-speed', type=float, default=2.0,
+                        help='Speed multiplier for simulation (higher = faster)')
     return parser.parse_args()
 
 
@@ -641,7 +666,8 @@ def main():
         use_realsense=not args.no_realsense and not args.webcam and not args.simulation,
         use_webcam=args.webcam,
         use_simulation=args.simulation,
-        camera_index=args.camera_index
+        camera_index=args.camera_index,
+        simulation_speed=args.simulation_speed
     )
     app.run()
 
