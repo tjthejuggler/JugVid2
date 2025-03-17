@@ -1,0 +1,6 @@
+If pyrealsense2 gives a pipeline error:
+export PYTHONPATH=~/Projects/librealsense/build/Release:$PYTHONPATH
+
+Juggling python/cv programs
+-Watches Juggling and colors balls based on balls that are in the same orbits
+-figures out siteswap from watching

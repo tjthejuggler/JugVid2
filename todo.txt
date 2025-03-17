@@ -1,0 +1,7 @@
+maybe we need to go find some other ball tracking software and start fresh
+
+we should see how many frames per second we are getting right now from the camera, the more the better i think
+
+hook up the ability to change the colors of the wifi balls and make simulated balls. we want keyboard colntrol, but we also want to have a way for rules to be made that change the colors of the balls based on what the balls do. like the orbits thing where balls of different orbits have different colors.
+
+make a github repo for this once it gets to be something useful. maybe we alrady have the framework of a program that can change the colors of the balls that would be useful for us to hijack or take stuff from.
