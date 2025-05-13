@@ -5,7 +5,7 @@ import time
 import cv2
 import numpy as np
 import argparse
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QInputDialog
 from PyQt6.QtCore import QTimer
 
 # Add the parent directory to the path so we can import the modules
@@ -20,6 +20,8 @@ from juggling_tracker.modules.ball_identifier import BallIdentifier
 from juggling_tracker.modules.multi_ball_tracker import MultiBallTracker
 from juggling_tracker.ui.main_window import MainWindow
 from juggling_tracker.extensions.extension_manager import ExtensionManager
+from juggling_tracker.modules.ball_definer import BallDefiner
+from juggling_tracker.modules.ball_profile_manager import BallProfileManager
 
 
 class WebcamFrameAcquisition:
@@ -352,7 +354,25 @@ class JugglingTracker:
         self.skeleton_detector = SkeletonDetector()
         self.blob_detector = BlobDetector()
         self.color_calibration = ColorCalibration(config_dir=self.config_dir)
-        self.ball_identifier = BallIdentifier(self.color_calibration)
+        
+        self.ball_profile_manager = BallProfileManager(self.config_dir)
+        # Assuming self.depth_processor is initialized before this line
+        if hasattr(self, 'depth_processor'):
+            self.ball_definer = BallDefiner(self.depth_processor)
+        else:
+            print("ERROR: self.depth_processor not initialized before BallDefiner. BallDefiner might not work.")
+            self.ball_definer = None # Or handle error appropriately
+        
+        # Store last frames for definition process
+        self.last_color_image_for_def = None
+        self.last_depth_image_for_def = None # This should be the raw depth (e.g. uint16 mm)
+        self.last_intrinsics_for_def = None
+        self.last_depth_scale_for_def = None
+
+        # Initialize BallIdentifier with ColorCalibration
+        # Note: The current BallIdentifier implementation expects ColorCalibration, not BallProfileManager
+        # In a future update, BallIdentifier could be modified to use BallProfileManager directly
+        self.ball_identifier = BallIdentifier(self.ball_profile_manager, self.color_calibration)
         self.ball_tracker = MultiBallTracker()
         
         # Create Qt application
@@ -363,6 +383,17 @@ class JugglingTracker:
         
         # Create main window
         self.main_window = MainWindow(self, self.config_dir)
+        
+        # In __init__, after main_window is created and ball_profile_manager is initialized:
+        if hasattr(self, 'main_window') and hasattr(self.main_window, 'update_defined_balls_list'):
+            self.main_window.update_defined_balls_list()
+        
+        # Connect save/load buttons from MainWindow to JugglingTracker methods
+        if hasattr(self, 'main_window'):
+            if hasattr(self.main_window, 'save_balls_button'):
+                self.main_window.save_balls_button.clicked.connect(self.save_ball_profiles)
+            if hasattr(self.main_window, 'load_balls_button'):
+                self.main_window.load_balls_button.clicked.connect(self.load_ball_profiles)
         
         self.extension_manager = ExtensionManager()
         
@@ -474,8 +505,38 @@ class JugglingTracker:
         # Get frames from the camera
         depth_frame, color_frame, depth_image, color_image = self.frame_acquisition.get_frames()
         
+        # ------------ TEMPORARY DEBUG START ------------
+        if color_image is not None:
+            print(f"[Tracker Loop] Color image received: shape={color_image.shape}, dtype={color_image.dtype}")
+        else:
+            print("[Tracker Loop] Color image is NONE")
+        
+        if depth_image is not None:
+            print(f"[Tracker Loop] Depth image received: shape={depth_image.shape}, dtype={depth_image.dtype}")
+        else:
+            print("[Tracker Loop] Depth image is NONE")
+        # ------------ TEMPORARY DEBUG END ------------
+
         if depth_image is None or color_image is None:
+            print("Warning: Invalid frames received from frame_acquisition, skipping frame processing.") # Enhanced message
             return
+        
+        # Store frames for ball definition
+        self.last_color_image_for_def = color_image.copy()
+        self.last_depth_image_for_def = depth_image.copy() # Assuming depth_image is raw depth (e.g. mm)
+        
+        # Get intrinsics and depth scale
+        if hasattr(self, 'frame_acquisition'):
+            if hasattr(self.frame_acquisition, 'get_intrinsics'):
+                self.last_intrinsics_for_def = self.frame_acquisition.get_intrinsics()
+            else:
+                print("WARN: frame_acquisition does not have get_intrinsics method.")
+            if hasattr(self.frame_acquisition, 'get_depth_scale'):
+                self.last_depth_scale_for_def = self.frame_acquisition.get_depth_scale()
+            else:
+                print("WARN: frame_acquisition does not have get_depth_scale method.")
+        else:
+            print("WARN: self.frame_acquisition not available for intrinsics/depth_scale.")
         
         # Check if we're in simulation mode for optimized processing
         is_simulation_mode = isinstance(self.frame_acquisition, SimulationFrameAcquisition)
@@ -488,32 +549,66 @@ class JugglingTracker:
             right_hand_x = int(3 * self.frame_acquisition.width / 4)
             hand_positions = ((left_hand_x, hand_y), (right_hand_x, hand_y))
             
+            # Get current time for tracking
+            current_time = time.time()
+            
+            # Get current intrinsics (might be None in simulation mode)
+            current_intrinsics = self.frame_acquisition.get_intrinsics()
+            
             # Create simplified identified balls directly from simulation data
             identified_balls = []
             for i, ball in enumerate(self.frame_acquisition.balls):
+                # Create a ball structure that matches what BallIdentifier.identify_balls would return
                 identified_balls.append({
+                    'profile_id': f"sim_ball_{i+1}",  # Simulated profile ID
                     'name': f"Ball {i+1}",
                     'position': (int(ball['x']), int(ball['y'])),
                     'radius': ball['radius'],
-                    'color': ball['color'],
-                    'depth': ball['z'] * self.frame_acquisition.get_depth_scale(),
+                    'color_bgr': ball['color'],
+                    'depth_m': ball['z'] * self.frame_acquisition.get_depth_scale(),
                     'contour': None  # Not needed for visualization
                 })
             
+            # Update ball trackers with new signature
+            if hasattr(self, 'ball_tracker') and self.ball_tracker is not None:
+                tracked_balls_display_info = self.ball_tracker.update_trackers(
+                    identified_balls,
+                    current_intrinsics,
+                    current_time=current_time
+                )
+            else:
+                tracked_balls_display_info = []
+            
+            # Prepare simplified frame data for simulation mode
+            frame_data = {
+                'timestamp': current_time,
+                'color_image': color_image,
+                'depth_image': depth_image,
+                'intrinsics': current_intrinsics,
+                'identified_balls_raw': identified_balls,
+                'tracked_balls': self.ball_tracker.get_tracked_balls() if hasattr(self, 'ball_tracker') else [],
+                'hand_positions': hand_positions
+            }
+            
             # Update the main window with the simulated data
-            self.main_window.update_frame(
-                color_image=color_image,
-                depth_image=depth_image,
-                masks=None,  # Skip mask visualization in simulation mode
-                identified_balls=identified_balls,
-                hand_positions=hand_positions,
-                extension_results=None,  # Skip extension processing in simulation mode
-                debug_info={
-                    'Num Identified Balls': len(identified_balls),
-                    'Mode': 'Simulation (Optimized)',
-                    'Simulation Speed': self.frame_acquisition.simulation_speed
-                }
-            )
+            try:
+                self.main_window.update_frame(
+                    color_image=color_image,
+                    depth_image=depth_image,
+                    masks=None,  # Skip mask visualization in simulation mode
+                    tracked_balls_for_display=tracked_balls_display_info,
+                    hand_positions=hand_positions,
+                    extension_results=None,  # Skip extension processing in simulation mode
+                    debug_info={
+                        'Num Identified Balls': len(identified_balls),
+                        'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()) if hasattr(self, 'ball_tracker') else 0,
+                        'Mode': 'Simulation (Optimized)',
+                        'Simulation Speed': self.frame_acquisition.simulation_speed,
+                        'Frame Size': f"{color_image.shape[1]}x{color_image.shape[0]}"
+                    }
+                )
+            except Exception as e:
+                print(f"Error updating frame in simulation mode: {e}")
         else:
             # Original processing path for real camera or webcam
             # Process the depth frame
@@ -541,34 +636,50 @@ class JugglingTracker:
             # Filter blobs by depth variance
             filtered_blobs = self.blob_detector.filter_blobs_by_depth_variance(blobs, depth_in_meters)
             
-            # Identify balls
-            identified_balls = self.ball_identifier.identify_balls(filtered_blobs, color_image)
+            # Get current time for tracking
+            current_time = time.time()
             
-            # Get ball positions and depths
-            ball_positions = self.ball_identifier.get_ball_positions(identified_balls)
-            ball_depths = self.ball_identifier.get_ball_depths(identified_balls)
+            # Get current intrinsics
+            current_intrinsics = self.frame_acquisition.get_intrinsics()
             
-            # Update ball trackers
-            ball_3d_positions = self.ball_tracker.update_trackers(
-                identified_balls,
-                ball_positions,
-                ball_depths,
-                self.frame_acquisition.get_intrinsics()
-            )
+            # Identify balls with depth and intrinsics
+            if hasattr(self, 'ball_identifier') and self.ball_identifier is not None:
+                identified_balls = self.ball_identifier.identify_balls(
+                    filtered_blobs,
+                    color_image,
+                    depth_in_meters,
+                    current_intrinsics
+                )
+            else:
+                identified_balls = []
+                # print_once("WARN: BallIdentifier not available in process_frame.")
             
-            # Get ball velocities
+            # Update ball trackers with new signature
+            if hasattr(self, 'ball_tracker') and self.ball_tracker is not None:
+                tracked_balls_display_info = self.ball_tracker.update_trackers(
+                    identified_balls,
+                    current_intrinsics,
+                    current_time=current_time
+                )
+            else:
+                tracked_balls_display_info = []
+                # print_once("WARN: MultiBallTracker not available in process_frame.")
+            
+            # Get ball velocities (still available through the tracker)
             ball_velocities = self.ball_tracker.get_ball_velocities()
             
-            # Prepare frame data for extensions
+            # Prepare frame data for extensions with updated structure
             frame_data = {
+                'timestamp': current_time,
                 'color_image': color_image,
                 'depth_image': depth_image,
                 'depth_in_meters': depth_in_meters,
+                'intrinsics': current_intrinsics,
+                'raw_blobs': filtered_blobs,
+                'identified_balls_raw': identified_balls,
                 'tracked_balls': self.ball_tracker.get_tracked_balls(),
-                'ball_positions': ball_3d_positions,
                 'ball_velocities': ball_velocities,
-                'hand_positions': hand_positions,
-                'timestamp': time.time()
+                'hand_positions': hand_positions
             }
             
             # Process the frame with extensions
@@ -587,28 +698,119 @@ class JugglingTracker:
                 'Combined': combined_mask
             }
             
-            # Update the main window with the frame
-            self.main_window.update_frame(
-                color_image=color_image,
-                depth_image=depth_image,
-                masks=masks if self.main_window.show_masks else None,
-                identified_balls=identified_balls,
-                hand_positions=hand_positions,
-                extension_results=extension_results,
-                debug_info={
-                    'Num Blobs': len(blobs),
-                    'Num Filtered Blobs': len(filtered_blobs),
-                    'Num Identified Balls': len(identified_balls),
-                    'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()),
-                    'Mode': 'RealSense' if isinstance(self.frame_acquisition, FrameAcquisition) else 'Webcam'
-                }
-            )
+            # Update the main window with the frame, now using tracked_balls_display_info
+            try:
+                self.main_window.update_frame(
+                    color_image=color_image,
+                    depth_image=depth_image,
+                    masks=masks if self.main_window.show_masks else None,
+                    tracked_balls_for_display=tracked_balls_display_info,
+                    hand_positions=hand_positions,
+                    extension_results=extension_results,
+                    debug_info={
+                        'Num Blobs': len(blobs),
+                        'Num Filtered Blobs': len(filtered_blobs),
+                        'Num Identified Balls': len(identified_balls),
+                        'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()),
+                        'Mode': 'RealSense' if isinstance(self.frame_acquisition, FrameAcquisition) else 'Webcam',
+                        'Frame Size': f"{color_image.shape[1]}x{color_image.shape[0]}"
+                    }
+                )
+            except Exception as e:
+                print(f"Error updating frame in camera mode: {e}")
         
         # Update frame count and FPS
         self.frame_count += 1
         elapsed_time = time.time() - self.start_time
         if elapsed_time > 0:
             self.fps = self.frame_count / elapsed_time
+    
+    def define_new_ball(self, roi_rect_display_coords):
+        if self.last_color_image_for_def is None or \
+           self.last_depth_image_for_def is None or \
+           self.last_intrinsics_for_def is None or \
+           self.last_depth_scale_for_def is None:
+            print("Error: Frame data not available for ball definition.")
+            if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage("Error: Frame data not ready. Try again.")
+            return
+
+        if not self.ball_definer:
+            print("Error: BallDefiner not initialized.")
+            if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage("Error: BallDefiner service not available.")
+            return
+
+        # IMPORTANT: Map ROI from display coordinates to original image coordinates
+        # This is crucial if your display scales the image.
+        # The plan suggests MainWindow handles this scaling. If roi_rect_display_coords
+        # are from a scaled display, they MUST be converted to original image coordinates here or in MainWindow.
+        # For this example, assuming roi_rect_display_coords are already scaled to original image dimensions
+        # or that no scaling is applied in the display.
+        # If scaling is needed:
+        # current_display_width = self.main_window.video_label.pixmap().width()
+        # current_display_height = self.main_window.video_label.pixmap().height()
+        # original_image_width = self.last_color_image_for_def.shape[1]
+        # original_image_height = self.last_color_image_for_def.shape[0]
+        #
+        # if current_display_width == 0 or current_display_height == 0: # Avoid division by zero
+        #     print("Error: Display pixmap has zero dimensions. Cannot scale ROI.")
+        #     return
+        #
+        # scale_x = original_image_width / current_display_width
+        # scale_y = original_image_height / current_display_height
+        #
+        # roi_rect_image_coords = (
+        #     int(roi_rect_display_coords[0] * scale_x),
+        #     int(roi_rect_display_coords[1] * scale_y),
+        #     int(roi_rect_display_coords[2] * scale_x),
+        #     int(roi_rect_display_coords[3] * scale_y)
+        # )
+        # For now, let's assume no scaling or it's handled by MainWindow:
+        roi_rect_image_coords = roi_rect_display_coords
+
+
+        name_suggestion = f"Ball {len(self.ball_profile_manager.get_all_profiles()) + 1}"
+        ball_name, ok = QInputDialog.getText(self.main_window if hasattr(self, 'main_window') else None,
+                                             "Define New Ball",
+                                             "Enter ball name:", text=name_suggestion)
+        if not ok or not ball_name:
+            if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage("Ball definition cancelled.")
+            return
+
+        new_profile = self.ball_definer.define_ball_from_roi(
+            roi_rect_image_coords,
+            self.last_color_image_for_def,
+            self.last_depth_image_for_def, # Pass the raw depth image (e.g. uint16 in mm)
+            self.last_intrinsics_for_def,
+            self.last_depth_scale_for_def
+        )
+
+        if new_profile:
+            new_profile.name = ball_name # Set user-defined name
+            self.ball_profile_manager.add_profile(new_profile)
+            if hasattr(self, 'main_window'):
+                if hasattr(self.main_window, 'statusBar'):
+                    self.main_window.statusBar().showMessage(f"Ball '{new_profile.name}' defined successfully.")
+                if hasattr(self.main_window, 'update_defined_balls_list'):
+                    self.main_window.update_defined_balls_list() # Update UI
+        else:
+            if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage("Failed to define ball. Check console for errors.")
+    
+    def save_ball_profiles(self):
+        self.ball_profile_manager.save_profiles()
+        if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+            self.main_window.statusBar().showMessage("Ball profiles saved.")
+
+    def load_ball_profiles(self):
+        self.ball_profile_manager.load_profiles()
+        if hasattr(self, 'main_window'):
+            if hasattr(self.main_window, 'update_defined_balls_list'):
+                self.main_window.update_defined_balls_list()
+            if hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage(f"Loaded {len(self.ball_profile_manager.get_all_profiles())} ball profiles.")
     
     def cleanup(self):
         """

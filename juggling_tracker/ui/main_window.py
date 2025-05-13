@@ -7,10 +7,14 @@ from PyQt6.QtWidgets import (
     QStatusBar, QVBoxLayout, QHBoxLayout, QSplitter, QWidget,
     QLabel, QFileDialog, QDialog, QDialogButtonBox,
     QFormLayout, QLineEdit, QComboBox, QCheckBox, QSpinBox,
-    QMessageBox
+    QMessageBox, QPushButton, QListWidget, QListWidgetItem
 )
-from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction, QPainter, QPen
 from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtSlot
+
+# Application's module imports
+from juggling_tracker.modules.ball_definer import BallDefiner
+from juggling_tracker.modules.ball_profile_manager import BallProfileManager
 
 class MainWindow(QMainWindow):
     """
@@ -54,6 +58,11 @@ class MainWindow(QMainWindow):
         self.calibration_start_time = 0
         self.calibration_timeout = 10  # seconds
         
+        # Ball definition state
+        self.is_defining_ball_mode = False
+        self.defining_roi_start_pt = None
+        self.defining_roi_current_rect = None  # Store as (x,y,w,h) for drawing
+        
         # Initialize display options
         self.show_depth = False
         self.show_masks = False
@@ -71,6 +80,13 @@ class MainWindow(QMainWindow):
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_ui)
         self.update_timer.start(33)  # ~30 FPS
+        
+        # Connect ball profile buttons if app is available
+        if self.app:
+            if hasattr(self.app, 'save_ball_profiles'):
+                self.save_balls_button.clicked.connect(self.app.save_ball_profiles)
+            if hasattr(self.app, 'load_ball_profiles'):
+                self.load_balls_button.clicked.connect(self.app.load_ball_profiles)
     
     def setup_ui(self):
         """
@@ -93,6 +109,44 @@ class MainWindow(QMainWindow):
         
         # Add video display to main layout
         self.main_layout.addWidget(self.video_label)
+        
+        # Create controls layout for ball definition
+        self.ball_controls_layout = QHBoxLayout()
+        self.ball_controls_layout.setContentsMargins(5, 5, 5, 5)
+        self.ball_controls_layout.setSpacing(5)
+        
+        # Add new button for "New Ball"
+        self.new_ball_button = QPushButton("New Ball")
+        self.new_ball_button.clicked.connect(self.toggle_define_ball_mode)
+        self.ball_controls_layout.addWidget(self.new_ball_button)
+        
+        # Add Save/Load Ball Set buttons
+        self.save_balls_button = QPushButton("Save Ball Set")
+        self.ball_controls_layout.addWidget(self.save_balls_button)
+        
+        self.load_balls_button = QPushButton("Load Ball Set")
+        self.ball_controls_layout.addWidget(self.load_balls_button)
+        
+        # Add a list widget to display defined balls
+        self.defined_balls_list = QListWidget()
+        self.defined_balls_list.setMaximumHeight(150)
+        
+        # Create a container for ball controls and list
+        self.ball_controls_container = QWidget()
+        ball_container_layout = QVBoxLayout(self.ball_controls_container)
+        ball_container_layout.setContentsMargins(0, 0, 0, 0)
+        ball_container_layout.addLayout(self.ball_controls_layout)
+        ball_container_layout.addWidget(self.defined_balls_list)
+        
+        # Add ball controls container to main layout
+        self.main_layout.addWidget(self.ball_controls_container)
+        
+        # Mouse event handling for the video label
+        if hasattr(self, 'video_label'):
+            self.video_label.mousePressEvent = self.video_label_mouse_press
+            self.video_label.mouseMoveEvent = self.video_label_mouse_move
+            self.video_label.mouseReleaseEvent = self.video_label_mouse_release
+            self.video_label.setMouseTracking(True)  # Important for mouseMoveEvent without button press
         
         # Create status bar
         self.status_bar = QStatusBar(self)
@@ -306,8 +360,8 @@ class MainWindow(QMainWindow):
         # In a real implementation, it would update the video display and status bar
         pass
     
-    def update_frame(self, color_image, depth_image=None, masks=None, identified_balls=None, 
-                    hand_positions=None, extension_results=None, debug_info=None):
+    def update_frame(self, color_image, depth_image=None, masks=None, identified_balls=None,
+                    hand_positions=None, extension_results=None, debug_info=None, tracked_balls_for_display=None):
         """
         Update the video display with a new frame.
         
@@ -315,24 +369,97 @@ class MainWindow(QMainWindow):
             color_image: Color image in BGR format
             depth_image: Depth image (optional)
             masks: Dictionary of mask_name -> mask (optional)
-            identified_balls: Dictionary of ball_name -> blob (optional)
+            identified_balls: Dictionary of ball_name -> blob (optional) - DEPRECATED, use tracked_balls_for_display instead
             hand_positions: Tuple of ((left_hand_x, left_hand_y), (right_hand_x, right_hand_y)) (optional)
             extension_results: Dictionary of extension_name -> results (optional)
             debug_info: Dictionary of debug information (optional)
+            tracked_balls_for_display: List of dictionaries containing tracked ball information (optional)
         """
         if color_image is None:
+            print("Warning: update_frame called with None color_image")
             return
         
-        # Create a composite view similar to the original visualizer
+        # First, make a copy of the color image to draw on
+        display_image = color_image.copy()
+        
+        # Create a composite view with color and depth images
         composite = self.create_composite_view(color_image, depth_image, masks)
         
+        # ------------ TEMPORARY DEBUG START ------------
+        if composite is not None:
+            print(f"[MainWindow] update_frame: Composite image for QImage: shape={composite.shape}, dtype={composite.dtype}, flags={composite.flags.c_contiguous}")
+            # Ensure composite is C-contiguous
+            if not composite.flags['C_CONTIGUOUS']:
+                print("[MainWindow] update_frame: Composite not C-contiguous, making it so.")
+                composite = np.ascontiguousarray(composite)
+        else:
+            print("[MainWindow] update_frame: Composite is None before QImage creation!")
+            return # Can't proceed
+        # ------------ TEMPORARY DEBUG END ------------
+
         # Convert the OpenCV image to a Qt image
         height, width, channel = composite.shape
         bytes_per_line = 3 * width
         q_img = QImage(composite.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
         
-        # Display the image
-        self.video_label.setPixmap(QPixmap.fromImage(q_img))
+        # Create a pixmap from the Qt image
+        pixmap_to_display = QPixmap.fromImage(q_img)
+        
+        # Create a copy of the pixmap for drawing
+        final_pixmap_for_display = pixmap_to_display.copy()
+        painter = QPainter(final_pixmap_for_display)
+        
+        # Draw tracked balls if available
+        if tracked_balls_for_display:
+            for ball_info in tracked_balls_for_display:
+                # Extract ball information
+                pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
+                radius = int(ball_info['radius_px'])
+                ball_name = ball_info['name']
+                ball_id_display = ball_info['id']
+                
+                # Skip drawing if position is outside the visible area
+                # This prevents drawing on the depth image portion if it's shown
+                if self.show_depth and pos_x >= color_image.shape[1]:
+                    continue
+                
+                # Set pen color based on disappeared status
+                if ball_info['disappeared_frames'] > 0:
+                    # Use gray for disappeared balls
+                    pen_color = Qt.GlobalColor.gray
+                else:
+                    # Use green for visible balls
+                    pen_color = Qt.GlobalColor.green
+                
+                # Set up pen for drawing
+                pen = QPen(pen_color, 2)
+                painter.setPen(pen)
+                
+                # Draw the ball circle
+                if radius > 0:
+                    painter.drawEllipse(pos_x - radius, pos_y - radius, radius * 2, radius * 2)
+                
+                # Draw text (name and ID)
+                text_y_offset = radius + 15  # Place text below the ball
+                display_text = f"{ball_name} (TID:{ball_id_display})"
+                painter.drawText(pos_x - radius, pos_y + text_y_offset, display_text)
+        
+        # Draw ROI rectangle if in ball definition mode
+        if self.is_defining_ball_mode and self.defining_roi_current_rect:
+            pen = QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.SolidLine)
+            painter.setPen(pen)
+            x, y, w, h = self.defining_roi_current_rect
+            
+            # Only draw ROI on the color image portion if depth is shown
+            if self.show_depth and x >= color_image.shape[1]:
+                # Skip drawing ROI on depth image portion
+                pass
+            else:
+                painter.drawRect(x, y, w, h)
+        
+        # End painting and display the result
+        painter.end()
+        self.video_label.setPixmap(final_pixmap_for_display)
         
         # Update status bar
         if debug_info:
@@ -347,66 +474,101 @@ class MainWindow(QMainWindow):
             self.fps_label.setText(f"FPS: {self.app.fps:.1f}")
     
     def create_composite_view(self, color_image, depth_image=None, masks=None):
-        """
-        Create a composite view with color and depth images.
-        
-        Args:
-            color_image: Color image in BGR format
-            depth_image: Depth image (optional)
-            masks: Dictionary of mask_name -> mask (optional)
+        if color_image is None:
+            print("[MainWindow] create_composite_view: color_image is None, returning black.")
+            return np.zeros((480, 640, 3), dtype=np.uint8)
             
-        Returns:
-            numpy.ndarray: Composite image
-        """
-        # Start with the color image
         composite = color_image.copy()
-        
-        # If depth image is available and should be shown
+        print(f"[MainWindow] create_composite_view: Initial composite (color) shape: {composite.shape}")
+
         if depth_image is not None and self.show_depth:
-            # Convert depth image to 8-bit and apply colormap
-            depth_colormap = cv2.applyColorMap(
-                cv2.convertScaleAbs(depth_image, alpha=0.03), 
-                cv2.COLORMAP_JET
-            )
-            
-            # Resize depth colormap to match color image size
-            depth_colormap = cv2.resize(
-                depth_colormap, 
-                (color_image.shape[1], color_image.shape[0])
-            )
-            
-            # Create a composite image (side by side)
-            composite = np.hstack((color_image, depth_colormap))
-        
+            print(f"[MainWindow] create_composite_view: Processing depth image. Shape: {depth_image.shape}, dtype: {depth_image.dtype}")
+            try:
+                # Ensure depth_image is 2D if it's not already (it should be)
+                if len(depth_image.shape) == 3:
+                    depth_image_gray = depth_image[:,:,0] # Or handle as error
+                    print(f"[MainWindow] Warning: Depth image was 3-channel, took first channel. Shape: {depth_image_gray.shape}")
+                else:
+                    depth_image_gray = depth_image
+
+                # Normalize depth image for visualization
+                # Check for empty or all-zero depth image to avoid errors with convertScaleAbs
+                if np.any(depth_image_gray): # Only process if there's some data
+                    depth_normalized = cv2.convertScaleAbs(depth_image_gray, alpha=0.03) # Adjust alpha if needed
+                else:
+                    depth_normalized = np.zeros_like(depth_image_gray, dtype=np.uint8) # Black if empty
+                
+                print(f"[MainWindow] create_composite_view: Depth normalized. Shape: {depth_normalized.shape}, dtype: {depth_normalized.dtype}")
+
+                depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+                print(f"[MainWindow] create_composite_view: Depth colormap. Shape: {depth_colormap.shape}")
+                
+                # Resize depth colormap to match color image height, maintain aspect for width if different
+                target_height = color_image.shape[0]
+                target_width = color_image.shape[1] # Assuming we want depth map to be same width as color for hstack
+                
+                # Ensure depth_colormap is not empty before resizing
+                if depth_colormap.size == 0:
+                    print("[MainWindow] Error: depth_colormap is empty before resize.")
+                    # Fallback: create a black image of target size
+                    depth_colormap = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+                elif depth_colormap.shape[0] != target_height or depth_colormap.shape[1] != target_width:
+                    depth_colormap_resized = cv2.resize(depth_colormap, (target_width, target_height))
+                    print(f"[MainWindow] create_composite_view: Depth colormap resized. Shape: {depth_colormap_resized.shape}")
+                else:
+                    depth_colormap_resized = depth_colormap # No resize needed
+
+                # Create a composite image (side by side)
+                if composite.shape[0] == depth_colormap_resized.shape[0]: # Check height compatibility for hstack
+                    composite = np.hstack((composite, depth_colormap_resized))
+                    print(f"[MainWindow] create_composite_view: Composite after hstack with depth. Shape: {composite.shape}")
+                else:
+                    print(f"[MainWindow] Error: Height mismatch for hstack. Color: {composite.shape[0]}, Depth: {depth_colormap_resized.shape[0]}")
+                    # Fallback: don't stack, just use original composite (color only)
+            except Exception as e:
+                print(f"[MainWindow] Error creating depth colormap or hstacking: {e}")
+                # Fallback to just color image if depth processing fails
+                composite = color_image.copy()
+      
         # If masks are available and should be shown
         if masks is not None and self.show_masks:
-            mask_images = []
-            
-            for mask_name, mask in masks.items():
-                # Convert mask to BGR for visualization
-                mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            try:
+                mask_images = []
                 
-                # Add the mask name
-                cv2.putText(mask_bgr, mask_name, (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                for mask_name, mask in masks.items():
+                    if mask is None:
+                        print(f"Warning: Mask '{mask_name}' is None")
+                        continue
+                        
+                    # Convert mask to BGR for visualization
+                    mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                    
+                    # Add the mask name
+                    cv2.putText(mask_bgr, mask_name, (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Resize mask to a smaller size
+                    mask_small = cv2.resize(mask_bgr, (320, 240))
+                    
+                    mask_images.append(mask_small)
                 
-                # Resize mask to a smaller size
-                mask_small = cv2.resize(mask_bgr, (320, 240))
-                
-                mask_images.append(mask_small)
-            
-            # Combine masks horizontally
-            if mask_images:
-                masks_row = np.hstack(mask_images)
-                
-                # Add padding to match the width of the composite image
-                if masks_row.shape[1] < composite.shape[1]:
-                    padding = np.zeros((masks_row.shape[0], composite.shape[1] - masks_row.shape[1], 3), dtype=np.uint8)
-                    masks_row = np.hstack((masks_row, padding))
-                
-                # Combine with the composite image
-                composite = np.vstack((composite, masks_row))
+                # Combine masks horizontally
+                if mask_images:
+                    masks_row = np.hstack(mask_images)
+                    
+                    # Add padding to match the width of the composite image
+                    if masks_row.shape[1] < composite.shape[1]:
+                        padding = np.zeros((masks_row.shape[0], composite.shape[1] - masks_row.shape[1], 3), dtype=np.uint8)
+                        masks_row = np.hstack((masks_row, padding))
+                    
+                    # Combine with the composite image
+                    composite = np.vstack((composite, masks_row))
+            except Exception as e:
+                print(f"[MainWindow] Error processing masks: {e}")
+                # Continue with just the color/depth composite
         
+        print(f"[MainWindow] create_composite_view: Final composite shape for return: {composite.shape}")
         return composite
     
     def load_window_state(self):
@@ -438,6 +600,10 @@ class MainWindow(QMainWindow):
         self.toggle_debug_action.setChecked(self.debug_mode)
         self.toggle_fps_action.setChecked(self.show_fps)
         self.toggle_extensions_action.setChecked(self.show_extension_results)
+        
+        # Update the defined balls list if app is available
+        if self.app and hasattr(self.app, 'ball_profile_manager'):
+            self.update_defined_balls_list()
     
     def save_window_state(self):
         """
@@ -826,3 +992,95 @@ class MainWindow(QMainWindow):
             str: Name of the ball being calibrated
         """
         return self.calibration_ball_name
+        
+    # Ball definition methods
+    
+    def toggle_define_ball_mode(self):
+        """
+        Toggle ball definition mode.
+        """
+        self.is_defining_ball_mode = not self.is_defining_ball_mode
+        if self.is_defining_ball_mode:
+            self.new_ball_button.setText("Cancel Defining")
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage("Click and drag on the video to define a new ball.")
+            QApplication.setOverrideCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.new_ball_button.setText("New Ball")
+            if hasattr(self, 'statusBar'):
+                self.statusBar().clearMessage()
+            QApplication.restoreOverrideCursor()
+            self.defining_roi_start_pt = None
+            self.defining_roi_current_rect = None
+        if hasattr(self, 'video_label'):
+            self.video_label.update()
+    
+    def video_label_mouse_press(self, event):
+        """
+        Handle mouse press events on the video label.
+        
+        Args:
+            event: Mouse event
+        """
+        if hasattr(self, 'video_label') and self.is_defining_ball_mode and event.button() == Qt.MouseButton.LeftButton:
+            self.defining_roi_start_pt = event.pos()
+            self.defining_roi_current_rect = None  # Reset current rect
+            self.video_label.update()  # Trigger repaint
+    
+    def video_label_mouse_move(self, event):
+        """
+        Handle mouse move events on the video label.
+        
+        Args:
+            event: Mouse event
+        """
+        if hasattr(self, 'video_label') and self.is_defining_ball_mode and self.defining_roi_start_pt:
+            x1, y1 = self.defining_roi_start_pt.x(), self.defining_roi_start_pt.y()
+            x2, y2 = event.pos().x(), event.pos().y()
+            # Ensure correct rectangle coordinates regardless of drag direction
+            self.defining_roi_current_rect = (min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            self.video_label.update()  # Trigger repaint
+    
+    def video_label_mouse_release(self, event):
+        """
+        Handle mouse release events on the video label.
+        
+        Args:
+            event: Mouse event
+        """
+        if hasattr(self, 'video_label') and self.is_defining_ball_mode and self.defining_roi_start_pt and event.button() == Qt.MouseButton.LeftButton:
+            if self.defining_roi_current_rect and self.defining_roi_current_rect[2] > 5 and self.defining_roi_current_rect[3] > 5:  # Min size
+                # Scale ROI coordinates if video_label displays a scaled QPixmap
+                # This is a simplified approach - in a real implementation, you would need to
+                # calculate the scaling factor based on the original image size and the displayed size
+                scaled_roi = self.defining_roi_current_rect
+                
+                # Trigger ball definition in the app
+                if self.app and hasattr(self.app, 'define_new_ball'):
+                    self.app.define_new_ball(scaled_roi)
+                    # Update the defined balls list after defining a new ball
+                    if hasattr(self.app, 'ball_profile_manager'):
+                        self.update_defined_balls_list()
+                else:
+                    print("Error: app does not have define_new_ball method.")
+            
+            self.toggle_define_ball_mode()  # Exit defining mode after attempt
+    
+    def update_defined_balls_list(self):
+        """
+        Update the list of defined balls.
+        """
+        if not hasattr(self, 'defined_balls_list'):
+            print("WARN: defined_balls_list not found in MainWindow.")
+            return
+            
+        self.defined_balls_list.clear()
+        if self.app and hasattr(self.app, 'ball_profile_manager'):
+            profiles = self.app.ball_profile_manager.get_all_profiles()
+            for profile in profiles:
+                item_text = f"{profile.name} (ID: {profile.profile_id[:8]})"
+                list_item = QListWidgetItem(item_text)
+                list_item.setData(Qt.ItemDataRole.UserRole, profile.profile_id)  # Store ID for later
+                self.defined_balls_list.addItem(list_item)
+        else:
+            print("WARN: app.ball_profile_manager not found for updating defined balls list.")
