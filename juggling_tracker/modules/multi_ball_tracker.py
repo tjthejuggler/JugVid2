@@ -284,6 +284,21 @@ class MultiBallTracker:
                 velocities[obj_id] = [0,0,0]
         return velocities
     
+    def remove_ball(self, ball_id):
+        """
+        Remove a specific ball from tracking.
+        
+        Args:
+            ball_id: ID of the ball to remove
+            
+        Returns:
+            bool: True if the ball was successfully removed, False otherwise
+        """
+        if ball_id in self.tracked_objects:
+            self._deregister(ball_id)
+            return True
+        return False
+    
     def reset(self):
         """
         Reset all trackers.

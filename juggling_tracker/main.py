@@ -812,6 +812,25 @@ class JugglingTracker:
             if hasattr(self.main_window, 'statusBar'):
                 self.main_window.statusBar().showMessage(f"Loaded {len(self.ball_profile_manager.get_all_profiles())} ball profiles.")
     
+    def untrack_ball(self, ball_id):
+        """
+        Remove a specific ball from tracking.
+        
+        Args:
+            ball_id: ID of the ball to untrack
+        """
+        if hasattr(self, 'ball_tracker') and self.ball_tracker:
+            if hasattr(self.ball_tracker, 'remove_ball'):
+                success = self.ball_tracker.remove_ball(ball_id)
+                if success and hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                    self.main_window.statusBar().showMessage(f"Ball with ID {ball_id} removed from tracking", 3000)
+                elif hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                    self.main_window.statusBar().showMessage(f"Failed to remove ball with ID {ball_id}", 3000)
+            else:
+                print("Error: ball_tracker does not have remove_ball method.")
+                if hasattr(self, 'main_window') and hasattr(self.main_window, 'statusBar'):
+                    self.main_window.statusBar().showMessage("Error: Ball tracking system does not support removing balls", 3000)
+    
     def cleanup(self):
         """
         Clean up resources.

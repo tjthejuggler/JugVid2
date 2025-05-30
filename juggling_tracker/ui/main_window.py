@@ -7,9 +7,10 @@ from PyQt6.QtWidgets import (
     QStatusBar, QVBoxLayout, QHBoxLayout, QSplitter, QWidget,
     QLabel, QFileDialog, QDialog, QDialogButtonBox,
     QFormLayout, QLineEdit, QComboBox, QCheckBox, QSpinBox,
-    QMessageBox, QPushButton, QListWidget, QListWidgetItem
+    QMessageBox, QPushButton, QListWidget, QListWidgetItem,
+    QGroupBox, QScrollArea
 )
-from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction, QPainter, QPen
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtSlot
 
 # Application's module imports
@@ -69,6 +70,9 @@ class MainWindow(QMainWindow):
         self.debug_mode = False
         self.show_fps = True
         self.show_extension_results = True
+        
+        # Initialize tracked balls panel data
+        self.tracked_balls_data = []
         
         # Set up the UI
         self.setup_ui()
@@ -138,8 +142,20 @@ class MainWindow(QMainWindow):
         ball_container_layout.addLayout(self.ball_controls_layout)
         ball_container_layout.addWidget(self.defined_balls_list)
         
-        # Add ball controls container to main layout
+        # Create tracked balls panel
+        self.tracked_balls_panel = QGroupBox("Tracked Balls")
+        self.tracked_balls_layout = QVBoxLayout()
+        self.tracked_balls_panel.setLayout(self.tracked_balls_layout)
+        self.tracked_balls_panel.setMaximumHeight(200)
+        
+        # Create a scroll area for the tracked balls panel
+        self.tracked_balls_scroll = QScrollArea()
+        self.tracked_balls_scroll.setWidgetResizable(True)
+        self.tracked_balls_scroll.setWidget(self.tracked_balls_panel)
+        
+        # Add ball controls container and tracked balls panel to main layout
         self.main_layout.addWidget(self.ball_controls_container)
+        self.main_layout.addWidget(self.tracked_balls_scroll)
         
         # Mouse event handling for the video label
         if hasattr(self, 'video_label'):
@@ -411,6 +427,12 @@ class MainWindow(QMainWindow):
         
         # Draw tracked balls if available
         if tracked_balls_for_display:
+            # Store the tracked balls data for the panel
+            self.tracked_balls_data = tracked_balls_for_display
+            
+            # Update the tracked balls panel
+            self.update_tracked_balls_panel()
+            
             for ball_info in tracked_balls_for_display:
                 # Extract ball information
                 pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
@@ -423,26 +445,52 @@ class MainWindow(QMainWindow):
                 if self.show_depth and pos_x >= color_image.shape[1]:
                     continue
                 
-                # Set pen color based on disappeared status
-                if ball_info['disappeared_frames'] > 0:
-                    # Use gray for disappeared balls
-                    pen_color = Qt.GlobalColor.gray
-                else:
-                    # Use green for visible balls
-                    pen_color = Qt.GlobalColor.green
+                # Set pen color based on profile_id to distinguish different balls
+                # Create a simple hash of the profile_id to get a consistent color
+                profile_id = ball_info.get('profile_id', '')
+                color_hash = hash(profile_id) % 0xFFFFFF
+                r = (color_hash & 0xFF0000) >> 16
+                g = (color_hash & 0x00FF00) >> 8
+                b = color_hash & 0x0000FF
                 
-                # Set up pen for drawing
-                pen = QPen(pen_color, 2)
+                # Make sure the color is bright enough to be visible
+                brightness = (r * 299 + g * 587 + b * 114) / 1000
+                if brightness < 128:  # If too dark
+                    r = min(255, r + 100)
+                    g = min(255, g + 100)
+                    b = min(255, b + 100)
+                
+                # Use gray for disappeared balls, otherwise use the profile-specific color
+                if ball_info['disappeared_frames'] > 0:
+                    pen_color = Qt.GlobalColor.yellow  # Yellow for predicted positions
+                else:
+                    pen_color = QColor(r, g, b)
+                
+                # Set up pen for drawing - make it more visible with thicker line
+                pen = QPen(pen_color, 3)  # 3px thick line for better visibility
                 painter.setPen(pen)
                 
                 # Draw the ball circle
                 if radius > 0:
+                    # Draw a more visible circle around the ball
                     painter.drawEllipse(pos_x - radius, pos_y - radius, radius * 2, radius * 2)
                 
-                # Draw text (name and ID)
-                text_y_offset = radius + 15  # Place text below the ball
-                display_text = f"{ball_name} (TID:{ball_id_display})"
-                painter.drawText(pos_x - radius, pos_y + text_y_offset, display_text)
+                # Draw text with contrasting background for better visibility
+                text = f"{ball_name} (ID:{ball_id_display})"
+                
+                # Create a background rectangle for text
+                font = painter.font()
+                font_metrics = QFontMetrics(font)
+                text_width = font_metrics.horizontalAdvance(text)
+                text_height = font_metrics.height()
+                
+                # Draw text background
+                painter.fillRect(pos_x - text_width//2, pos_y + radius + 5,
+                                text_width + 10, text_height + 5, QColor(0, 0, 0, 180))
+                
+                # Draw text in bright color
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(pos_x - text_width//2 + 5, pos_y + radius + text_height + 5, text)
         
         # Draw ROI rectangle if in ball definition mode
         if self.is_defining_ball_mode and self.defining_roi_current_rect:
@@ -1084,3 +1132,67 @@ class MainWindow(QMainWindow):
                 self.defined_balls_list.addItem(list_item)
         else:
             print("WARN: app.ball_profile_manager not found for updating defined balls list.")
+    
+    def update_tracked_balls_panel(self):
+        """
+        Update the tracked balls panel with current tracking information.
+        """
+        # Clear existing widgets
+        while self.tracked_balls_layout.count():
+            item = self.tracked_balls_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        
+        # Add a widget for each tracked ball
+        for ball in self.tracked_balls_data:
+            ball_widget = QWidget()
+            ball_layout = QHBoxLayout()
+            ball_widget.setLayout(ball_layout)
+            
+            # Ball info
+            ball_id = ball.get('id', 'Unknown')
+            ball_name = ball.get('name', 'Unknown')
+            pos_3d = ball.get('position_3d_kf', [0, 0, 0])
+            
+            # Create labels
+            name_label = QLabel(f"{ball_name} (ID: {ball_id})")
+            coords_label = QLabel(f"X: {pos_3d[0]:.2f}, Y: {pos_3d[1]:.2f}, Z: {pos_3d[2]:.2f}")
+            
+            # Add time since first tracked
+            # This would require tracking when the ball was first seen
+            # For now, we'll just show if it's currently visible or predicted
+            status_text = "Visible" if ball.get('disappeared_frames', 0) == 0 else f"Predicted ({ball.get('disappeared_frames', 0)})"
+            status_label = QLabel(f"Status: {status_text}")
+            
+            # Create untrack button
+            untrack_button = QPushButton("Untrack")
+            untrack_button.clicked.connect(lambda checked, bid=ball_id: self.untrack_ball(bid))
+            
+            # Add to layout
+            ball_layout.addWidget(name_label)
+            ball_layout.addWidget(coords_label)
+            ball_layout.addWidget(status_label)
+            ball_layout.addWidget(untrack_button)
+            
+            # Add to panel
+            self.tracked_balls_layout.addWidget(ball_widget)
+        
+        # If no balls are tracked, show a message
+        if not self.tracked_balls_data:
+            no_balls_label = QLabel("No balls currently being tracked")
+            self.tracked_balls_layout.addWidget(no_balls_label)
+    
+    def untrack_ball(self, ball_id):
+        """
+        Remove a ball from tracking.
+        
+        Args:
+            ball_id: ID of the ball to untrack
+        """
+        if hasattr(self, 'app') and self.app:
+            if hasattr(self.app, 'untrack_ball'):
+                self.app.untrack_ball(ball_id)
+                # The panel will be updated on the next frame update
+            else:
+                print("Error: app does not have untrack_ball method.")

@@ -29,20 +29,20 @@ A robust juggling ball tracking system that uses a RealSense depth camera to tra
    ```
 
 2. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+    ```
+    pip install -r requirements.txt
+    ```
 
 3. Make sure your RealSense camera is connected to your computer (if using RealSense mode).
 
 ## Usage
 
-1. Run the application:
-   ```
-   python run_juggling_tracker.py
-   ```
+1. Run the application using the provided script:
+    ```
+    ./run.sh
+    ```
 
-   The script will automatically set up the PYTHONPATH environment variable if needed to find the librealsense library.
+    This script automatically sets up the required PYTHONPATH for the librealsense library.
 
 2. Command-line options:
    ```
