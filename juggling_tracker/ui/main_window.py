@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel, QFileDialog, QDialog, QDialogButtonBox,
     QFormLayout, QLineEdit, QComboBox, QCheckBox, QSpinBox,
     QMessageBox, QPushButton, QListWidget, QListWidgetItem,
-    QGroupBox, QScrollArea
+    QGroupBox, QScrollArea, QSlider
 )
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction, QPainter, QPen, QColor, QFontMetrics
 from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtSlot
@@ -16,6 +16,7 @@ from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtS
 # Application's module imports
 from juggling_tracker.modules.ball_definer import BallDefiner
 from juggling_tracker.modules.ball_profile_manager import BallProfileManager
+from .simple_tracking_window import SimpleTrackingWindow
 
 class MainWindow(QMainWindow):
     """
@@ -67,12 +68,17 @@ class MainWindow(QMainWindow):
         # Initialize display options
         self.show_depth = False
         self.show_masks = False
+        self.show_color = True  # Color video feed (always shown by default)
         self.debug_mode = False
         self.show_fps = True
         self.show_extension_results = True
+        self.show_simple_tracking = True  # Simple tracking overlay
         
         # Initialize tracked balls panel data
         self.tracked_balls_data = []
+        
+        # Initialize simple tracking window reference
+        self.simple_tracking_window = None
         
         # Set up the UI
         self.setup_ui()
@@ -153,8 +159,13 @@ class MainWindow(QMainWindow):
         self.tracked_balls_scroll.setWidgetResizable(True)
         self.tracked_balls_scroll.setWidget(self.tracked_balls_panel)
         
-        # Add ball controls container and tracked balls panel to main layout
+        # Create simple tracking settings button
+        self.simple_tracking_settings_btn = QPushButton("Simple Tracking Settings")
+        self.simple_tracking_settings_btn.clicked.connect(self.open_simple_tracking_settings)
+        
+        # Add all groups to main layout
         self.main_layout.addWidget(self.ball_controls_container)
+        self.main_layout.addWidget(self.simple_tracking_settings_btn)
         self.main_layout.addWidget(self.tracked_balls_scroll)
         
         # Mouse event handling for the video label
@@ -242,6 +253,14 @@ class MainWindow(QMainWindow):
         # View menu
         self.view_menu = self.menu_bar.addMenu("&View")
         
+        # Toggle color action
+        self.toggle_color_action = QAction("Toggle &Color View", self)
+        self.toggle_color_action.setShortcut(QKeySequence("C"))
+        self.toggle_color_action.setCheckable(True)
+        self.toggle_color_action.setChecked(self.show_color)
+        self.toggle_color_action.triggered.connect(self.toggle_color)
+        self.view_menu.addAction(self.toggle_color_action)
+        
         # Toggle depth action
         self.toggle_depth_action = QAction("Toggle &Depth View", self)
         self.toggle_depth_action.setShortcut(QKeySequence("D"))
@@ -257,6 +276,14 @@ class MainWindow(QMainWindow):
         self.toggle_masks_action.setChecked(self.show_masks)
         self.toggle_masks_action.triggered.connect(self.toggle_masks)
         self.view_menu.addAction(self.toggle_masks_action)
+        
+        # Toggle simple tracking action
+        self.toggle_simple_tracking_action = QAction("Toggle &Simple Tracking", self)
+        self.toggle_simple_tracking_action.setShortcut(QKeySequence("S"))
+        self.toggle_simple_tracking_action.setCheckable(True)
+        self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
+        self.toggle_simple_tracking_action.triggered.connect(self.toggle_simple_tracking)
+        self.view_menu.addAction(self.toggle_simple_tracking_action)
         
         # Toggle debug action
         self.toggle_debug_action = QAction("Toggle &Debug Info", self)
@@ -377,7 +404,7 @@ class MainWindow(QMainWindow):
         pass
     
     def update_frame(self, color_image, depth_image=None, masks=None, identified_balls=None,
-                    hand_positions=None, extension_results=None, debug_info=None, tracked_balls_for_display=None):
+                    hand_positions=None, extension_results=None, debug_info=None, tracked_balls_for_display=None, simple_tracking=None):
         """
         Update the video display with a new frame.
         
@@ -390,6 +417,7 @@ class MainWindow(QMainWindow):
             extension_results: Dictionary of extension_name -> results (optional)
             debug_info: Dictionary of debug information (optional)
             tracked_balls_for_display: List of dictionaries containing tracked ball information (optional)
+            simple_tracking: Dictionary containing simple tracking results (optional)
         """
         if color_image is None:
             print("Warning: update_frame called with None color_image")
@@ -492,6 +520,51 @@ class MainWindow(QMainWindow):
                 painter.setPen(QPen(Qt.GlobalColor.white))
                 painter.drawText(pos_x - text_width//2 + 5, pos_y + radius + text_height + 5, text)
         
+        # Draw simple tracking results if available and enabled
+        if simple_tracking and self.show_simple_tracking:
+            # Draw average position
+            avg_pos = simple_tracking.get('average_position')
+            if avg_pos:
+                # Draw a large cross at the average position
+                cross_size = 20
+                painter.setPen(QPen(Qt.GlobalColor.cyan, 4))
+                painter.drawLine(avg_pos[0] - cross_size, avg_pos[1], avg_pos[0] + cross_size, avg_pos[1])
+                painter.drawLine(avg_pos[0], avg_pos[1] - cross_size, avg_pos[0], avg_pos[1] + cross_size)
+                
+                # Draw a circle around the average position
+                painter.setPen(QPen(Qt.GlobalColor.cyan, 2))
+                painter.drawEllipse(avg_pos[0] - 15, avg_pos[1] - 15, 30, 30)
+                
+                # Draw text showing tracking info
+                tracking_text = f"Avg: ({avg_pos[0]}, {avg_pos[1]})"
+                object_count = simple_tracking.get('object_count', 0)
+                total_area = simple_tracking.get('total_area', 0)
+                info_text = f"Objects: {object_count}, Area: {total_area:.0f}px"
+                
+                # Draw text background
+                font = painter.font()
+                font_metrics = QFontMetrics(font)
+                text_width = max(font_metrics.horizontalAdvance(tracking_text), font_metrics.horizontalAdvance(info_text))
+                text_height = font_metrics.height()
+                
+                painter.fillRect(avg_pos[0] - text_width//2 - 5, avg_pos[1] - 40,
+                                text_width + 10, text_height * 2 + 10, QColor(0, 0, 0, 180))
+                
+                # Draw text
+                painter.setPen(QPen(Qt.GlobalColor.cyan))
+                painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 25, tracking_text)
+                painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 10, info_text)
+            
+            # Draw individual object positions
+            individual_positions = simple_tracking.get('individual_positions', [])
+            for i, pos in enumerate(individual_positions):
+                painter.setPen(QPen(Qt.GlobalColor.magenta, 2))
+                painter.drawEllipse(pos[0] - 5, pos[1] - 5, 10, 10)
+                
+                # Draw small number label
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(pos[0] + 8, pos[1] - 8, str(i + 1))
+        
         # Draw ROI rectangle if in ball definition mode
         if self.is_defining_ball_mode and self.defining_roi_current_rect:
             pen = QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.SolidLine)
@@ -525,10 +598,16 @@ class MainWindow(QMainWindow):
         if color_image is None:
             print("[MainWindow] create_composite_view: color_image is None, returning black.")
             return np.zeros((480, 640, 3), dtype=np.uint8)
-            
-        composite = color_image.copy()
-        print(f"[MainWindow] create_composite_view: Initial composite (color) shape: {composite.shape}")
-
+        
+        # Determine what views to show
+        views_to_show = []
+        
+        # Add color view if enabled
+        if self.show_color:
+            views_to_show.append(('color', color_image.copy()))
+            print(f"[MainWindow] create_composite_view: Adding color view: {color_image.shape}")
+        
+        # Add depth view if enabled and available
         if depth_image is not None and self.show_depth:
             print(f"[MainWindow] create_composite_view: Processing depth image. Shape: {depth_image.shape}, dtype: {depth_image.dtype}")
             try:
@@ -551,70 +630,68 @@ class MainWindow(QMainWindow):
                 depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
                 print(f"[MainWindow] create_composite_view: Depth colormap. Shape: {depth_colormap.shape}")
                 
-                # Resize depth colormap to match color image height, maintain aspect for width if different
+                # Resize depth colormap to match color image dimensions
                 target_height = color_image.shape[0]
-                target_width = color_image.shape[1] # Assuming we want depth map to be same width as color for hstack
+                target_width = color_image.shape[1]
                 
                 # Ensure depth_colormap is not empty before resizing
                 if depth_colormap.size == 0:
                     print("[MainWindow] Error: depth_colormap is empty before resize.")
                     # Fallback: create a black image of target size
-                    depth_colormap = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-
+                    depth_colormap_resized = np.zeros((target_height, target_width, 3), dtype=np.uint8)
                 elif depth_colormap.shape[0] != target_height or depth_colormap.shape[1] != target_width:
                     depth_colormap_resized = cv2.resize(depth_colormap, (target_width, target_height))
                     print(f"[MainWindow] create_composite_view: Depth colormap resized. Shape: {depth_colormap_resized.shape}")
                 else:
                     depth_colormap_resized = depth_colormap # No resize needed
 
-                # Create a composite image (side by side)
-                if composite.shape[0] == depth_colormap_resized.shape[0]: # Check height compatibility for hstack
-                    composite = np.hstack((composite, depth_colormap_resized))
-                    print(f"[MainWindow] create_composite_view: Composite after hstack with depth. Shape: {composite.shape}")
-                else:
-                    print(f"[MainWindow] Error: Height mismatch for hstack. Color: {composite.shape[0]}, Depth: {depth_colormap_resized.shape[0]}")
-                    # Fallback: don't stack, just use original composite (color only)
+                views_to_show.append(('depth', depth_colormap_resized))
+                print(f"[MainWindow] create_composite_view: Adding depth view: {depth_colormap_resized.shape}")
+                
             except Exception as e:
-                print(f"[MainWindow] Error creating depth colormap or hstacking: {e}")
-                # Fallback to just color image if depth processing fails
-                composite = color_image.copy()
-      
-        # If masks are available and should be shown
+                print(f"[MainWindow] Error creating depth colormap: {e}")
+        
+        # Add mask view if enabled and available
         if masks is not None and self.show_masks:
             try:
-                mask_images = []
-                
-                for mask_name, mask in masks.items():
-                    if mask is None:
-                        print(f"Warning: Mask '{mask_name}' is None")
-                        continue
-                        
+                # Show only the combined mask (the most relevant one for simple tracking)
+                combined_mask = masks.get('Combined')
+                if combined_mask is not None:
                     # Convert mask to BGR for visualization
-                    mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                    mask_bgr = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
                     
                     # Add the mask name
-                    cv2.putText(mask_bgr, mask_name, (10, 30),
+                    cv2.putText(mask_bgr, "Proximity Mask", (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
-                    # Resize mask to a smaller size
-                    mask_small = cv2.resize(mask_bgr, (320, 240))
+                    # Resize mask to match color image dimensions
+                    target_height = color_image.shape[0]
+                    target_width = color_image.shape[1]
+                    mask_resized = cv2.resize(mask_bgr, (target_width, target_height))
                     
-                    mask_images.append(mask_small)
-                
-                # Combine masks horizontally
-                if mask_images:
-                    masks_row = np.hstack(mask_images)
-                    
-                    # Add padding to match the width of the composite image
-                    if masks_row.shape[1] < composite.shape[1]:
-                        padding = np.zeros((masks_row.shape[0], composite.shape[1] - masks_row.shape[1], 3), dtype=np.uint8)
-                        masks_row = np.hstack((masks_row, padding))
-                    
-                    # Combine with the composite image
-                    composite = np.vstack((composite, masks_row))
+                    views_to_show.append(('mask', mask_resized))
+                    print(f"[MainWindow] create_composite_view: Adding mask view: {mask_resized.shape}")
+                else:
+                    print("Warning: Combined mask not found in masks dictionary")
             except Exception as e:
                 print(f"[MainWindow] Error processing masks: {e}")
-                # Continue with just the color/depth composite
+        
+        # Create composite based on enabled views
+        if not views_to_show:
+            # If no views are enabled, show a black screen with a message
+            composite = np.zeros((color_image.shape[0], color_image.shape[1], 3), dtype=np.uint8)
+            cv2.putText(composite, "No views enabled", (50, composite.shape[0]//2),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            print("[MainWindow] create_composite_view: No views enabled, showing message")
+        elif len(views_to_show) == 1:
+            # Single view - use full size
+            composite = views_to_show[0][1]
+            print(f"[MainWindow] create_composite_view: Single view ({views_to_show[0][0]}): {composite.shape}")
+        else:
+            # Multiple views - arrange side by side
+            composite = np.hstack([view[1] for view in views_to_show])
+            view_names = [view[0] for view in views_to_show]
+            print(f"[MainWindow] create_composite_view: Multiple views ({', '.join(view_names)}): {composite.shape}")
         
         print(f"[MainWindow] create_composite_view: Final composite shape for return: {composite.shape}")
         return composite
@@ -636,15 +713,19 @@ class MainWindow(QMainWindow):
             self.restoreState(state)
         
         # Restore view settings
+        self.show_color = settings.value("show_color", True, type=bool)
         self.show_depth = settings.value("show_depth", False, type=bool)
         self.show_masks = settings.value("show_masks", False, type=bool)
+        self.show_simple_tracking = settings.value("show_simple_tracking", True, type=bool)
         self.debug_mode = settings.value("debug_mode", False, type=bool)
         self.show_fps = settings.value("show_fps", True, type=bool)
         self.show_extension_results = settings.value("show_extension_results", True, type=bool)
         
         # Update actions to match settings
+        self.toggle_color_action.setChecked(self.show_color)
         self.toggle_depth_action.setChecked(self.show_depth)
         self.toggle_masks_action.setChecked(self.show_masks)
+        self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
         self.toggle_debug_action.setChecked(self.debug_mode)
         self.toggle_fps_action.setChecked(self.show_fps)
         self.toggle_extensions_action.setChecked(self.show_extension_results)
@@ -666,8 +747,10 @@ class MainWindow(QMainWindow):
         settings.setValue("windowState", self.saveState())
         
         # Save view settings
+        settings.setValue("show_color", self.show_color)
         settings.setValue("show_depth", self.show_depth)
         settings.setValue("show_masks", self.show_masks)
+        settings.setValue("show_simple_tracking", self.show_simple_tracking)
         settings.setValue("debug_mode", self.debug_mode)
         settings.setValue("show_fps", self.show_fps)
         settings.setValue("show_extension_results", self.show_extension_results)
@@ -913,15 +996,19 @@ class MainWindow(QMainWindow):
         Reset the view.
         """
         # Reset view settings
+        self.show_color = True
         self.show_depth = False
         self.show_masks = False
+        self.show_simple_tracking = True
         self.debug_mode = False
         self.show_fps = True
         self.show_extension_results = True
         
         # Update actions
+        self.toggle_color_action.setChecked(self.show_color)
         self.toggle_depth_action.setChecked(self.show_depth)
         self.toggle_masks_action.setChecked(self.show_masks)
+        self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
         self.toggle_debug_action.setChecked(self.debug_mode)
         self.toggle_fps_action.setChecked(self.show_fps)
         self.toggle_extensions_action.setChecked(self.show_extension_results)
@@ -1040,6 +1127,18 @@ class MainWindow(QMainWindow):
             str: Name of the ball being calibrated
         """
         return self.calibration_ball_name
+    
+    def open_simple_tracking_settings(self):
+        """
+        Open the Simple Tracking Settings window.
+        """
+        if self.simple_tracking_window is None:
+            self.simple_tracking_window = SimpleTrackingWindow(self, self.app, self.config_dir)
+        
+        # Show the window (it will be created if it doesn't exist)
+        self.simple_tracking_window.show()
+        self.simple_tracking_window.raise_()
+        self.simple_tracking_window.activateWindow()
         
     # Ball definition methods
     
@@ -1196,3 +1295,39 @@ class MainWindow(QMainWindow):
                 # The panel will be updated on the next frame update
             else:
                 print("Error: app does not have untrack_ball method.")
+    
+    
+    def toggle_color(self, checked=None):
+        """
+        Toggle color view.
+        
+        Args:
+            checked (bool): New state (optional)
+        """
+        if checked is not None:
+            self.show_color = checked
+        else:
+            self.show_color = not self.show_color
+            self.toggle_color_action.setChecked(self.show_color)
+        
+        self.status_bar.showMessage(f"Color view {'enabled' if self.show_color else 'disabled'}", 3000)
+    
+    def toggle_simple_tracking(self, checked=None):
+        """
+        Toggle simple tracking overlay.
+        
+        Args:
+            checked (bool): New state (optional)
+        """
+        if checked is not None:
+            self.show_simple_tracking = checked
+        else:
+            self.show_simple_tracking = not self.show_simple_tracking
+            self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
+        
+        self.status_bar.showMessage(f"Simple tracking {'enabled' if self.show_simple_tracking else 'disabled'}", 3000)
+    
+    def update_tracking_position_display(self, simple_tracking_result):
+        """Update the position display in the simple tracking window if it's open."""
+        if self.simple_tracking_window is not None:
+            self.simple_tracking_window.update_tracking_position_display(simple_tracking_result)

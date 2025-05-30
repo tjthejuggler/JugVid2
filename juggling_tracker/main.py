@@ -18,6 +18,7 @@ from juggling_tracker.modules.blob_detector import BlobDetector
 from juggling_tracker.modules.color_calibration import ColorCalibration
 from juggling_tracker.modules.ball_identifier import BallIdentifier
 from juggling_tracker.modules.multi_ball_tracker import MultiBallTracker
+from juggling_tracker.modules.simple_tracker import SimpleTracker
 from juggling_tracker.ui.main_window import MainWindow
 from juggling_tracker.extensions.extension_manager import ExtensionManager
 from juggling_tracker.modules.ball_definer import BallDefiner
@@ -374,6 +375,7 @@ class JugglingTracker:
         # In a future update, BallIdentifier could be modified to use BallProfileManager directly
         self.ball_identifier = BallIdentifier(self.ball_profile_manager, self.color_calibration)
         self.ball_tracker = MultiBallTracker()
+        self.simple_tracker = SimpleTracker()
         
         # Create Qt application
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
@@ -592,6 +594,24 @@ class JugglingTracker:
             
             # Update the main window with the simulated data
             try:
+                # Create a simple tracking result for simulation mode
+                if len(identified_balls) > 0:
+                    avg_x = sum(ball['position'][0] for ball in identified_balls) / len(identified_balls)
+                    avg_y = sum(ball['position'][1] for ball in identified_balls) / len(identified_balls)
+                    sim_tracking_result = {
+                        'stable_position': (int(avg_x), int(avg_y)),
+                        'confidence': 0.8,
+                        'stability_score': 0.9,
+                        'object_count': len(identified_balls)
+                    }
+                else:
+                    sim_tracking_result = {
+                        'stable_position': None,
+                        'confidence': 0.0,
+                        'stability_score': 0.0,
+                        'object_count': 0
+                    }
+                
                 self.main_window.update_frame(
                     color_image=color_image,
                     depth_image=depth_image,
@@ -599,6 +619,7 @@ class JugglingTracker:
                     tracked_balls_for_display=tracked_balls_display_info,
                     hand_positions=hand_positions,
                     extension_results=None,  # Skip extension processing in simulation mode
+                    simple_tracking=sim_tracking_result,
                     debug_info={
                         'Num Identified Balls': len(identified_balls),
                         'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()) if hasattr(self, 'ball_tracker') else 0,
@@ -607,6 +628,9 @@ class JugglingTracker:
                         'Frame Size': f"{color_image.shape[1]}x{color_image.shape[0]}"
                     }
                 )
+                
+                # Update the tracking position display
+                self.main_window.update_tracking_position_display(sim_tracking_result)
             except Exception as e:
                 print(f"Error updating frame in simulation mode: {e}")
         else:
@@ -629,6 +653,10 @@ class JugglingTracker:
             
             # Combine the proximity mask and hand mask
             combined_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
+            
+            # Perform simple tracking on the combined mask
+            min_size, max_size = self.depth_processor.get_object_size_range()
+            simple_tracking_result = self.simple_tracker.track_objects(combined_mask, min_size, max_size)
             
             # Detect blobs in the combined mask
             blobs = self.blob_detector.detect_blobs(combined_mask)
@@ -679,7 +707,8 @@ class JugglingTracker:
                 'identified_balls_raw': identified_balls,
                 'tracked_balls': self.ball_tracker.get_tracked_balls(),
                 'ball_velocities': ball_velocities,
-                'hand_positions': hand_positions
+                'hand_positions': hand_positions,
+                'simple_tracking': simple_tracking_result
             }
             
             # Process the frame with extensions
@@ -707,15 +736,20 @@ class JugglingTracker:
                     tracked_balls_for_display=tracked_balls_display_info,
                     hand_positions=hand_positions,
                     extension_results=extension_results,
+                    simple_tracking=simple_tracking_result,
                     debug_info={
                         'Num Blobs': len(blobs),
                         'Num Filtered Blobs': len(filtered_blobs),
                         'Num Identified Balls': len(identified_balls),
                         'Num Tracked Balls': len(self.ball_tracker.get_tracked_balls()),
+                        'Simple Tracking Objects': simple_tracking_result.get('object_count', 0),
                         'Mode': 'RealSense' if isinstance(self.frame_acquisition, FrameAcquisition) else 'Webcam',
                         'Frame Size': f"{color_image.shape[1]}x{color_image.shape[0]}"
                     }
                 )
+                
+                # Update the tracking position display
+                self.main_window.update_tracking_position_display(simple_tracking_result)
             except Exception as e:
                 print(f"Error updating frame in camera mode: {e}")
         

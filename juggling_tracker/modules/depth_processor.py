@@ -24,6 +24,11 @@ class DepthProcessor:
         self.max_depth = max_depth
         self.proximity_delta = proximity_delta
         
+        # Configurable parameters for simple tracking
+        self.proximity_threshold = 0.15  # How much is considered "close" (in meters)
+        self.min_object_size = 50        # Minimum object size in pixels
+        self.max_object_size = 5000      # Maximum object size in pixels
+        
     def process_depth_frame(self, depth_frame, depth_image, depth_scale):
         """
         Process a depth frame to convert it to meters.
@@ -125,3 +130,42 @@ class DepthProcessor:
             return 0.0
             
         return np.mean(depths)
+    
+    def set_proximity_threshold(self, threshold):
+        """
+        Set the proximity threshold for simple tracking.
+        
+        Args:
+            threshold (float): Proximity threshold in meters
+        """
+        self.proximity_threshold = threshold
+        self.proximity_delta = threshold  # Update the existing proximity_delta as well
+    
+    def set_object_size_range(self, min_size, max_size):
+        """
+        Set the object size range for simple tracking.
+        
+        Args:
+            min_size (int): Minimum object size in pixels
+            max_size (int): Maximum object size in pixels
+        """
+        self.min_object_size = min_size
+        self.max_object_size = max_size
+    
+    def get_proximity_threshold(self):
+        """
+        Get the current proximity threshold.
+        
+        Returns:
+            float: Current proximity threshold in meters
+        """
+        return self.proximity_threshold
+    
+    def get_object_size_range(self):
+        """
+        Get the current object size range.
+        
+        Returns:
+            tuple: (min_size, max_size) in pixels
+        """
+        return (self.min_object_size, self.max_object_size)

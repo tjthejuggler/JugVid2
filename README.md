@@ -2,10 +2,16 @@
 
 A robust juggling ball tracking system that uses a RealSense depth camera to track multiple juggling balls and the juggler's hands in real-time.
 
+*Last updated: 2025-05-30 16:50 (UTC+7) - Moved simple tracking controls to separate settings window for cleaner UI*
+
 ## Features
 
 - Track 3-5 different colored juggling balls in real-time
 - Track the juggler's hands
+- **Simple tracking mode** for getting average position of close objects
+- Configurable proximity thresholds and object size filters
+- **Flexible video view options**: Toggle between color, depth, and proximity mask views independently
+- **View-only mode**: Option to show only the proximity mask for focused tracking analysis
 - Save and load color calibrations for different environments
 - Extensible architecture for adding new functionality
 - Simple UI with a menu bar for file operations and color calibration management
@@ -85,12 +91,84 @@ A robust juggling ball tracking system that uses a RealSense depth camera to tra
 
 - `q` or `ESC`: Quit the application
 - `p`: Pause/resume processing
-- `d`: Toggle debug mode
+- `c`: Toggle color view
+- `d`: Toggle depth view
 - `m`: Toggle masks view
-- `v`: Toggle depth view
+- `s`: Toggle simple tracking overlay
+- `b`: Toggle debug mode
 - `f`: Toggle FPS display
 - `e`: Toggle extension results display
 - `r`: Reset tracking
+
+## Simple Tracking Feature
+
+The simple tracking feature provides a basic way to track the average position of close objects in the scene. This is useful for getting a general sense of where juggling balls are located before implementing more sophisticated individual ball tracking.
+
+### Features:
+- **Average Position Calculation**: Calculates the centroid of all objects considered "close" based on depth
+- **Temporal Smoothing**: Averages positions across multiple frames for stability
+- **Confidence Scoring**: Provides reliability metrics for tracking results
+- **Position Jump Detection**: Identifies and handles sudden position changes
+- **Noise Reduction**: Morphological operations and Gaussian blur for cleaner masks
+- **Preset Configurations**: Pre-configured settings for different environments (Indoor, Outdoor, Stable, Default)
+- **Settings Persistence**: Save and load custom tracking configurations
+- **Real-time Position Display**: Shows current tracking coordinates, confidence, and stability scores
+- **Visual Overlay**: Shows average position with cyan cross and circle, individual objects with magenta dots
+- **Real-time Statistics**: Displays object count and total area
+
+### Simple Tracking Settings Window
+
+The simple tracking controls are now located in a separate, dedicated settings window accessible via the "Simple Tracking Settings" button in the main window. This provides a clean, organized interface for fine-tuning the tracking system:
+
+**Basic Controls:**
+- **Proximity Threshold**: Distance threshold for object detection (0.05m - 0.50m)
+- **Min/Max Object Size**: Size filtering to eliminate noise and irrelevant objects (10px - 10000px)
+
+**Advanced Settings:**
+- **Temporal Smoothing**: Number of frames to average for position stability (1-30 frames)
+- **Max Position Jump**: Maximum allowed position change between frames (10-500px)
+- **Confidence Threshold**: Minimum confidence required for valid tracking (0.0-1.0)
+- **Noise Reduction**: Morphological operations kernel size (0-15px)
+- **Blur Radius**: Gaussian blur for mask preprocessing (0-10px)
+
+**Presets:**
+- **Indoor**: Optimized for controlled indoor lighting
+- **Outdoor**: Adapted for variable outdoor conditions
+- **Stable**: Maximum stability with heavy smoothing
+- **Default**: Balanced settings for general use
+
+**Settings Management:**
+- **Save Settings**: Export current configuration to JSON file
+- **Load Settings**: Import previously saved configurations
+
+**Position Display:**
+The tracking position panel shows real-time data that extensions can access:
+- Current position coordinates (same as `stable_position` in extension data)
+- Confidence score (0.0-1.0)
+- Stability score (0.0-1.0)
+
+**Window Behavior:**
+- The settings window can be opened and closed independently of the main window
+- Settings remain active even when the window is closed
+- All parameter changes take effect immediately
+- The window is non-modal, allowing interaction with both windows simultaneously
+
+### Controls:
+- **Simple Tracking Settings Button**: Opens the dedicated settings window
+- **Toggle Simple Tracking**: Use 'S' key or View menu to show/hide the overlay
+- **Video View Toggles**: Use 'C', 'D', 'M' keys to toggle color, depth, and mask views independently
+
+### Usage:
+1. Enable simple tracking from the View menu or press 'S'
+2. Click "Simple Tracking Settings" to open the settings window
+3. Adjust the proximity threshold to focus on objects at the right distance
+4. Set min/max object sizes to filter out noise and background objects
+5. Fine-tune advanced parameters like temporal smoothing and confidence thresholds
+6. **For focused analysis**: Disable color and depth views (C and D keys) and enable only the mask view (M key) to see just the proximity mask
+7. The cyan cross shows the average position of all detected objects
+8. Individual objects are marked with numbered magenta circles
+
+This feature is designed as a stepping stone toward more advanced individual ball tracking and can be used by extensions for basic position data. The ability to view only the proximity mask is particularly useful for fine-tuning the tracking parameters.
 
 ## Fallback Modes
 
@@ -120,12 +198,13 @@ The system is built with a modular architecture that separates concerns and allo
 2. **Depth Processing Module**: Processes depth data to identify potential ball candidates
 3. **Skeleton Detection Module**: Detects the juggler's skeleton and extracts hand positions
 4. **Blob Detection Module**: Detects potential ball candidates in the filtered depth mask
-5. **Color Calibration Module**: Handles the calibration of ball colors
-6. **Ball Identification Module**: Identifies which blob corresponds to which ball
-7. **Multi-Ball Tracking Module**: Tracks multiple balls in 3D space
-8. **Visualization Module**: Displays the tracking results and UI elements
-9. **UI Manager**: Handles the user interface for the application
-10. **Extension Manager**: Manages the registration and execution of extensions
+5. **Simple Tracker Module**: Provides basic tracking of average object positions
+6. **Color Calibration Module**: Handles the calibration of ball colors
+7. **Ball Identification Module**: Identifies which blob corresponds to which ball
+8. **Multi-Ball Tracking Module**: Tracks multiple balls in 3D space
+9. **Visualization Module**: Displays the tracking results and UI elements
+10. **UI Manager**: Handles the user interface for the application
+11. **Extension Manager**: Manages the registration and execution of extensions
 
 ## Extending the System
 
