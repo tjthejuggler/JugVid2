@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.show_fps = True
         self.show_extension_results = True
         self.show_simple_tracking = True  # Simple tracking overlay
+        self.show_simple_tracking_mask = False  # Simple tracking mask view
         
         # Initialize tracked balls panel data
         self.tracked_balls_data = []
@@ -284,6 +285,14 @@ class MainWindow(QMainWindow):
         self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
         self.toggle_simple_tracking_action.triggered.connect(self.toggle_simple_tracking)
         self.view_menu.addAction(self.toggle_simple_tracking_action)
+        
+        # Toggle simple tracking mask action
+        self.toggle_simple_tracking_mask_action = QAction("Toggle Simple Tracking &Mask", self)
+        self.toggle_simple_tracking_mask_action.setShortcut(QKeySequence("T"))
+        self.toggle_simple_tracking_mask_action.setCheckable(True)
+        self.toggle_simple_tracking_mask_action.setChecked(self.show_simple_tracking_mask)
+        self.toggle_simple_tracking_mask_action.triggered.connect(self.toggle_simple_tracking_mask)
+        self.view_menu.addAction(self.toggle_simple_tracking_mask_action)
         
         # Toggle debug action
         self.toggle_debug_action = QAction("Toggle &Debug Info", self)
@@ -676,6 +685,63 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"[MainWindow] Error processing masks: {e}")
         
+        # Add simple tracking mask view if enabled and available
+        if self.show_simple_tracking_mask and self.app and hasattr(self.app, 'simple_tracker'):
+            try:
+                # Generate the proximity mask independently for simple tracking visualization
+                proximity_mask = None
+                
+                # We need to recreate the proximity mask from the depth data
+                if hasattr(self.app, 'depth_processor') and hasattr(self.app, 'last_depth_image_for_def') and hasattr(self.app, 'frame_acquisition'):
+                    # Get the current depth data
+                    depth_image = getattr(self.app, 'last_depth_image_for_def', None)
+                    depth_scale = self.app.frame_acquisition.get_depth_scale() if hasattr(self.app.frame_acquisition, 'get_depth_scale') else 0.001
+                    
+                    if depth_image is not None:
+                        # Process depth to meters
+                        depth_in_meters = self.app.depth_processor.process_depth_frame(None, depth_image, depth_scale)
+                        
+                        # Create proximity mask
+                        proximity_mask = self.app.depth_processor.create_proximity_mask(depth_in_meters)
+                        proximity_mask = self.app.depth_processor.cleanup_mask(proximity_mask)
+                        
+                        # Apply hand mask removal if available
+                        if hasattr(self.app, 'skeleton_detector') and hasattr(self.app, 'last_color_image_for_def'):
+                            color_image_for_hands = getattr(self.app, 'last_color_image_for_def', None)
+                            if color_image_for_hands is not None:
+                                pose_landmarks = self.app.skeleton_detector.detect_skeleton(color_image_for_hands)
+                                hand_positions = self.app.skeleton_detector.get_hand_positions(pose_landmarks, color_image_for_hands.shape)
+                                hand_mask = self.app.skeleton_detector.create_hand_mask(hand_positions, color_image_for_hands.shape)
+                                proximity_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
+                elif masks and 'Combined' in masks:
+                    # Fallback to using the existing combined mask if available
+                    proximity_mask = masks['Combined']
+                
+                if proximity_mask is not None:
+                    # Get the tracking visualization mask
+                    min_size = getattr(self.app.depth_processor, 'min_object_size', 50) if hasattr(self.app, 'depth_processor') else 50
+                    max_size = getattr(self.app.depth_processor, 'max_object_size', 5000) if hasattr(self.app, 'depth_processor') else 5000
+                    
+                    tracking_mask = self.app.simple_tracker.get_tracking_visualization_mask(
+                        proximity_mask, min_size, max_size
+                    )
+                    
+                    # Add title to the tracking mask
+                    cv2.putText(tracking_mask, "Simple Tracking Mask", (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    
+                    # Resize tracking mask to match color image dimensions
+                    target_height = color_image.shape[0]
+                    target_width = color_image.shape[1]
+                    tracking_mask_resized = cv2.resize(tracking_mask, (target_width, target_height))
+                    
+                    views_to_show.append(('simple_tracking_mask', tracking_mask_resized))
+                    print(f"[MainWindow] create_composite_view: Adding simple tracking mask view: {tracking_mask_resized.shape}")
+                else:
+                    print("Warning: No depth data available for simple tracking visualization")
+            except Exception as e:
+                print(f"[MainWindow] Error creating simple tracking mask: {e}")
+        
         # Create composite based on enabled views
         if not views_to_show:
             # If no views are enabled, show a black screen with a message
@@ -717,6 +783,7 @@ class MainWindow(QMainWindow):
         self.show_depth = settings.value("show_depth", False, type=bool)
         self.show_masks = settings.value("show_masks", False, type=bool)
         self.show_simple_tracking = settings.value("show_simple_tracking", True, type=bool)
+        self.show_simple_tracking_mask = settings.value("show_simple_tracking_mask", False, type=bool)
         self.debug_mode = settings.value("debug_mode", False, type=bool)
         self.show_fps = settings.value("show_fps", True, type=bool)
         self.show_extension_results = settings.value("show_extension_results", True, type=bool)
@@ -751,6 +818,7 @@ class MainWindow(QMainWindow):
         settings.setValue("show_depth", self.show_depth)
         settings.setValue("show_masks", self.show_masks)
         settings.setValue("show_simple_tracking", self.show_simple_tracking)
+        settings.setValue("show_simple_tracking_mask", self.show_simple_tracking_mask)
         settings.setValue("debug_mode", self.debug_mode)
         settings.setValue("show_fps", self.show_fps)
         settings.setValue("show_extension_results", self.show_extension_results)
@@ -1009,6 +1077,7 @@ class MainWindow(QMainWindow):
         self.toggle_depth_action.setChecked(self.show_depth)
         self.toggle_masks_action.setChecked(self.show_masks)
         self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
+        self.toggle_simple_tracking_mask_action.setChecked(self.show_simple_tracking_mask)
         self.toggle_debug_action.setChecked(self.debug_mode)
         self.toggle_fps_action.setChecked(self.show_fps)
         self.toggle_extensions_action.setChecked(self.show_extension_results)
@@ -1326,6 +1395,29 @@ class MainWindow(QMainWindow):
             self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
         
         self.status_bar.showMessage(f"Simple tracking {'enabled' if self.show_simple_tracking else 'disabled'}", 3000)
+    
+    def toggle_simple_tracking_mask(self, checked=None):
+        """
+        Toggle simple tracking mask view.
+        
+        Args:
+            checked (bool): New state (optional)
+        """
+        if checked is not None:
+            self.show_simple_tracking_mask = checked
+        else:
+            self.show_simple_tracking_mask = not self.show_simple_tracking_mask
+            self.toggle_simple_tracking_mask_action.setChecked(self.show_simple_tracking_mask)
+        
+        # Update the button in the simple tracking window if it's open
+        if self.simple_tracking_window is not None:
+            self.simple_tracking_window.show_tracking_mask_btn.setChecked(self.show_simple_tracking_mask)
+            if self.show_simple_tracking_mask:
+                self.simple_tracking_window.show_tracking_mask_btn.setText("Hide Simple Tracking Mask")
+            else:
+                self.simple_tracking_window.show_tracking_mask_btn.setText("Show Simple Tracking Mask")
+        
+        self.status_bar.showMessage(f"Simple tracking mask {'enabled' if self.show_simple_tracking_mask else 'disabled'}", 3000)
     
     def update_tracking_position_display(self, simple_tracking_result):
         """Update the position display in the simple tracking window if it's open."""

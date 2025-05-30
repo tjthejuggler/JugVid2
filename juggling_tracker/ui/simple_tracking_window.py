@@ -99,7 +99,7 @@ class SimpleTrackingWindow(QDialog):
         temporal_layout.addWidget(QLabel("Temporal Smoothing:"))
         self.temporal_slider = QSlider(Qt.Orientation.Horizontal)
         self.temporal_slider.setMinimum(1)
-        self.temporal_slider.setMaximum(30)
+        self.temporal_slider.setMaximum(500)
         self.temporal_slider.setValue(5)
         self.temporal_slider.valueChanged.connect(self.on_temporal_changed)
         temporal_layout.addWidget(self.temporal_slider)
@@ -112,7 +112,7 @@ class SimpleTrackingWindow(QDialog):
         jump_layout.addWidget(QLabel("Max Position Jump:"))
         self.jump_slider = QSlider(Qt.Orientation.Horizontal)
         self.jump_slider.setMinimum(10)
-        self.jump_slider.setMaximum(500)
+        self.jump_slider.setMaximum(1000)
         self.jump_slider.setValue(100)
         self.jump_slider.valueChanged.connect(self.on_jump_changed)
         jump_layout.addWidget(self.jump_slider)
@@ -138,7 +138,7 @@ class SimpleTrackingWindow(QDialog):
         morph_layout.addWidget(QLabel("Noise Reduction:"))
         self.morph_slider = QSlider(Qt.Orientation.Horizontal)
         self.morph_slider.setMinimum(0)
-        self.morph_slider.setMaximum(15)
+        self.morph_slider.setMaximum(50)
         self.morph_slider.setValue(3)
         self.morph_slider.valueChanged.connect(self.on_morph_changed)
         morph_layout.addWidget(self.morph_slider)
@@ -151,7 +151,7 @@ class SimpleTrackingWindow(QDialog):
         blur_layout.addWidget(QLabel("Blur Radius:"))
         self.blur_slider = QSlider(Qt.Orientation.Horizontal)
         self.blur_slider.setMinimum(0)
-        self.blur_slider.setMaximum(10)
+        self.blur_slider.setMaximum(25)
         self.blur_slider.setValue(1)
         self.blur_slider.valueChanged.connect(self.on_blur_changed)
         blur_layout.addWidget(self.blur_slider)
@@ -226,6 +226,18 @@ class SimpleTrackingWindow(QDialog):
         position_layout.addWidget(self.confidence_display_label)
         
         layout.addWidget(position_group)
+        
+        # Simple tracking mask view toggle
+        mask_view_group = QGroupBox("Tracking Mask View")
+        mask_view_layout = QVBoxLayout()
+        mask_view_group.setLayout(mask_view_layout)
+        
+        self.show_tracking_mask_btn = QPushButton("Show Simple Tracking Mask")
+        self.show_tracking_mask_btn.setCheckable(True)
+        self.show_tracking_mask_btn.clicked.connect(self.toggle_tracking_mask_view)
+        mask_view_layout.addWidget(self.show_tracking_mask_btn)
+        
+        layout.addWidget(mask_view_group)
     
     # Callback methods for sliders
     
@@ -380,3 +392,9 @@ class SimpleTrackingWindow(QDialog):
             self.position_label.setText("Position: Not tracking")
             self.confidence_display_label.setText("Confidence: 0.00")
             self.stability_label.setText("Stability: 0.00")
+    
+    def toggle_tracking_mask_view(self, checked):
+        """Toggle the simple tracking mask view in the main window."""
+        if self.app and hasattr(self.app, 'main_window'):
+            # Use the main window's toggle method to keep everything in sync
+            self.app.main_window.toggle_simple_tracking_mask(checked)

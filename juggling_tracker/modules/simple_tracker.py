@@ -17,8 +17,8 @@ class SimpleTracker:
         Initialize the SimpleTracker module.
         """
         self.last_position = None
-        self.position_history = deque(maxlen=30)  # Keep last 30 positions for smoothing
-        self.confidence_history = deque(maxlen=30)  # Track confidence over time
+        self.position_history = deque(maxlen=500)  # Keep last 500 positions for smoothing
+        self.confidence_history = deque(maxlen=500)  # Track confidence over time
         
         # Temporal smoothing parameters
         self.temporal_smoothing_frames = 5  # Number of frames to average
@@ -335,11 +335,11 @@ class SimpleTracker:
     
     def set_temporal_smoothing_frames(self, frames):
         """Set the number of frames to use for temporal smoothing."""
-        self.temporal_smoothing_frames = max(1, min(30, frames))
+        self.temporal_smoothing_frames = max(1, min(500, frames))
     
     def set_max_position_jump(self, pixels):
         """Set the maximum allowed position jump in pixels."""
-        self.max_position_jump = max(10, min(500, pixels))
+        self.max_position_jump = max(10, min(1000, pixels))
     
     def set_confidence_threshold(self, threshold):
         """Set the minimum confidence threshold for position updates."""
@@ -347,15 +347,15 @@ class SimpleTracker:
     
     def set_morphology_kernel_size(self, size):
         """Set the kernel size for morphological operations."""
-        self.morphology_kernel_size = max(0, min(15, size))
+        self.morphology_kernel_size = max(0, min(50, size))
     
     def set_gaussian_blur_radius(self, radius):
         """Set the Gaussian blur radius for noise reduction."""
-        self.gaussian_blur_radius = max(0, min(10, radius))
+        self.gaussian_blur_radius = max(0, min(25, radius))
     
     def set_min_contour_perimeter(self, perimeter):
         """Set the minimum contour perimeter."""
-        self.min_contour_perimeter = max(0, min(200, perimeter))
+        self.min_contour_perimeter = max(0, min(500, perimeter))
     
     def get_parameters(self):
         """
@@ -508,3 +508,112 @@ class SimpleTracker:
         """
         preset_params = self.get_preset_settings(preset_name)
         self.set_parameters(preset_params)
+    
+    def get_tracking_visualization_mask(self, proximity_mask, min_object_size=50, max_object_size=5000):
+        """
+        Generate a visualization mask showing the simple tracking processing and current average position.
+        
+        Args:
+            proximity_mask: Binary mask where close objects are white (255)
+            min_object_size: Minimum size (in pixels) for objects to be considered
+            max_object_size: Maximum size (in pixels) for objects to be considered
+            
+        Returns:
+            numpy.ndarray: BGR visualization mask with tracking information overlaid
+        """
+        if proximity_mask is None:
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Apply mask preprocessing (same as in track_objects)
+        processed_mask = self._preprocess_mask(proximity_mask)
+        
+        # Convert to BGR for visualization
+        vis_mask = cv2.cvtColor(processed_mask, cv2.COLOR_GRAY2BGR)
+        
+        # Find contours in the processed mask
+        contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours by size and perimeter
+        valid_contours = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+            if (min_object_size <= area <= max_object_size and
+                perimeter >= self.min_contour_perimeter):
+                valid_contours.append(contour)
+        
+        # Draw valid contours in green
+        cv2.drawContours(vis_mask, valid_contours, -1, (0, 255, 0), 2)
+        
+        # Calculate and draw individual object positions
+        positions = []
+        for contour in valid_contours:
+            # Calculate moments to find centroid
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                positions.append((cx, cy))
+                
+                # Draw individual object centers as small circles
+                cv2.circle(vis_mask, (cx, cy), 5, (255, 0, 255), -1)  # Magenta circles
+                
+                # Draw object number
+                cv2.putText(vis_mask, str(len(positions)), (cx + 8, cy - 8),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Calculate and draw average position if we have valid objects
+        if positions:
+            avg_x = sum(pos[0] for pos in positions) / len(positions)
+            avg_y = sum(pos[1] for pos in positions) / len(positions)
+            avg_pos = (int(avg_x), int(avg_y))
+            
+            # Draw a large cross at the average position
+            cross_size = 20
+            cv2.line(vis_mask, (avg_pos[0] - cross_size, avg_pos[1]),
+                    (avg_pos[0] + cross_size, avg_pos[1]), (0, 255, 255), 3)  # Cyan cross
+            cv2.line(vis_mask, (avg_pos[0], avg_pos[1] - cross_size),
+                    (avg_pos[0], avg_pos[1] + cross_size), (0, 255, 255), 3)
+            
+            # Draw a circle around the average position
+            cv2.circle(vis_mask, avg_pos, 15, (0, 255, 255), 2)  # Cyan circle
+            
+            # Draw coordinates text
+            coord_text = f"Avg: ({avg_pos[0]}, {avg_pos[1]})"
+            cv2.putText(vis_mask, coord_text, (avg_pos[0] - 80, avg_pos[1] - 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Draw smoothed position if available
+        smoothed_pos = self._calculate_smoothed_position()
+        if smoothed_pos:
+            # Draw smoothed position as a different colored marker
+            cv2.circle(vis_mask, smoothed_pos, 10, (0, 165, 255), 2)  # Orange circle
+            cv2.putText(vis_mask, f"Smooth: ({smoothed_pos[0]}, {smoothed_pos[1]})",
+                       (smoothed_pos[0] - 80, smoothed_pos[1] + 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+        
+        # Draw tracking parameters info
+        info_y = 30
+        cv2.putText(vis_mask, f"Objects: {len(positions)}", (10, info_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        info_y += 25
+        cv2.putText(vis_mask, f"Temporal: {self.temporal_smoothing_frames} frames", (10, info_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        info_y += 20
+        cv2.putText(vis_mask, f"Morph: {self.morphology_kernel_size}px", (10, info_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        info_y += 20
+        cv2.putText(vis_mask, f"Blur: {self.gaussian_blur_radius}px", (10, info_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Draw confidence and stability if available
+        if len(self.confidence_history) > 0:
+            current_confidence = self.confidence_history[-1]
+            info_y += 25
+            cv2.putText(vis_mask, f"Confidence: {current_confidence:.2f}", (10, info_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            info_y += 20
+            cv2.putText(vis_mask, f"Stability: {self.stability_score:.2f}", (10, info_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        return vis_mask

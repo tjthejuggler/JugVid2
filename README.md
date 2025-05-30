@@ -2,7 +2,7 @@
 
 A robust juggling ball tracking system that uses a RealSense depth camera to track multiple juggling balls and the juggler's hands in real-time.
 
-*Last updated: 2025-05-30 16:50 (UTC+7) - Moved simple tracking controls to separate settings window for cleaner UI*
+*Last updated: 2025-05-30 16:57 (UTC+7) - Enhanced simple tracking with expanded parameter ranges and new visualization mask view*
 
 ## Features
 
@@ -95,6 +95,7 @@ A robust juggling ball tracking system that uses a RealSense depth camera to tra
 - `d`: Toggle depth view
 - `m`: Toggle masks view
 - `s`: Toggle simple tracking overlay
+- `t`: Toggle simple tracking mask view
 - `b`: Toggle debug mode
 - `f`: Toggle FPS display
 - `e`: Toggle extension results display
@@ -125,11 +126,11 @@ The simple tracking controls are now located in a separate, dedicated settings w
 - **Min/Max Object Size**: Size filtering to eliminate noise and irrelevant objects (10px - 10000px)
 
 **Advanced Settings:**
-- **Temporal Smoothing**: Number of frames to average for position stability (1-30 frames)
-- **Max Position Jump**: Maximum allowed position change between frames (10-500px)
+- **Temporal Smoothing**: Number of frames to average for position stability (1-500 frames) - *Expanded range for long-term averaging*
+- **Max Position Jump**: Maximum allowed position change between frames (10-1000px) - *Expanded range for varied tracking scenarios*
 - **Confidence Threshold**: Minimum confidence required for valid tracking (0.0-1.0)
-- **Noise Reduction**: Morphological operations kernel size (0-15px)
-- **Blur Radius**: Gaussian blur for mask preprocessing (0-10px)
+- **Noise Reduction**: Morphological operations kernel size (0-50px) - *Expanded range for heavy noise filtering*
+- **Blur Radius**: Gaussian blur for mask preprocessing (0-25px) - *Expanded range for stronger smoothing*
 
 **Presets:**
 - **Indoor**: Optimized for controlled indoor lighting
@@ -140,6 +141,20 @@ The simple tracking controls are now located in a separate, dedicated settings w
 **Settings Management:**
 - **Save Settings**: Export current configuration to JSON file
 - **Load Settings**: Import previously saved configurations
+
+**Simple Tracking Mask View:**
+- **Independent View**: Completely separate from the proximity mask view - can be shown alone or alongside other views
+- **Show Simple Tracking Mask**: Toggle button to display a dedicated visualization of the simple tracking processing
+- **Real-time Visualization**: Generates its own proximity mask with tracking overlays
+- **Visual Elements**:
+  - White areas: Objects detected within proximity threshold
+  - Green contours: Valid objects (after size and perimeter filtering)
+  - Magenta circles: Individual object centers with numbering
+  - Cyan cross and circle: Current average position with coordinates
+  - Orange circle: Smoothed/stable position (if different from average)
+  - Parameter display: Shows current tracking settings and statistics
+- **Live Parameter Feedback**: All slider changes are immediately reflected in the mask view
+- **Flexible Display**: Can be shown without enabling the regular proximity mask view
 
 **Position Display:**
 The tracking position panel shows real-time data that extensions can access:
@@ -155,18 +170,26 @@ The tracking position panel shows real-time data that extensions can access:
 
 ### Controls:
 - **Simple Tracking Settings Button**: Opens the dedicated settings window
-- **Toggle Simple Tracking**: Use 'S' key or View menu to show/hide the overlay
+- **Toggle Simple Tracking**: Use 'S' key or View menu to show/hide the overlay on main video
+- **Toggle Simple Tracking Mask**: Use 'T' key or View → "Toggle Simple Tracking Mask" menu to show/hide the dedicated tracking visualization
+- **Simple Tracking Mask View**: Also available as toggle button in settings window
 - **Video View Toggles**: Use 'C', 'D', 'M' keys to toggle color, depth, and mask views independently
 
 ### Usage:
 1. Enable simple tracking from the View menu or press 'S'
 2. Click "Simple Tracking Settings" to open the settings window
-3. Adjust the proximity threshold to focus on objects at the right distance
-4. Set min/max object sizes to filter out noise and background objects
-5. Fine-tune advanced parameters like temporal smoothing and confidence thresholds
-6. **For focused analysis**: Disable color and depth views (C and D keys) and enable only the mask view (M key) to see just the proximity mask
-7. The cyan cross shows the average position of all detected objects
-8. Individual objects are marked with numbered magenta circles
+3. **Enable Simple Tracking Mask View**: Click "Show Simple Tracking Mask" for real-time visualization
+4. Adjust the proximity threshold to focus on objects at the right distance
+5. Set min/max object sizes to filter out noise and background objects
+6. Fine-tune advanced parameters:
+   - **Temporal smoothing**: Use up to 500 frames for very stable long-term averaging
+   - **Position jump detection**: Set higher thresholds for fast-moving objects
+   - **Noise reduction**: Use larger kernel sizes for noisy environments
+7. **Real-time feedback**: Watch the tracking mask view update as you adjust sliders
+8. **For focused analysis**: Use the dedicated tracking mask view alongside or instead of the main video feeds
+9. The cyan cross shows the average position with coordinates displayed
+10. Individual objects are marked with numbered magenta circles
+11. Orange markers show smoothed positions when different from raw average
 
 This feature is designed as a stepping stone toward more advanced individual ball tracking and can be used by extensions for basic position data. The ability to view only the proximity mask is particularly useful for fine-tuning the tracking parameters.
 
