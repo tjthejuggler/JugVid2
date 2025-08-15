@@ -159,6 +159,132 @@ python3 stillness_recorder.py --record-duration 8 --motion-threshold 800 --still
 
 _(Added: 2025-08-15, Updated: 2025-08-15)_
 
+### 4. Enhanced Stillness Recorder with Watch IMU ⭐ UPDATED!
+An advanced version of the stillness recorder that integrates with Watch OS IMU apps using the **Complete Python Integration Guide** for synchronized video + IMU data recording.
+
+**🚀 NEW: Complete Python Integration Guide Implementation**
+- **WatchController Class**: Full implementation of the integration guide's WatchController functionality
+- **Multi-Port Discovery**: Automatic discovery across ports 8080-9090 as per integration guide
+- **Concurrent Communication**: ThreadPoolExecutor for simultaneous watch communication
+- **State Management**: Complete recording state tracking (IDLE, RECORDING, STOPPING)
+- **Synchronized Sessions**: Perfect timing synchronization between video and IMU data
+- **Enhanced Error Handling**: Comprehensive retry logic and connection management
+- **Magnetometer Support**: Full 9-axis IMU data (accelerometer, gyroscope, magnetometer)
+
+**Features:**
+- **All original stillness recorder features** plus:
+- **Dual Watch OS IMU Integration**: Synchronized recording from left and right wrist watches
+- **Network-based Communication**: HTTP commands to start/stop IMU recording on watches
+- **Automatic Watch Discovery**: Scan network to find available Watch OS apps
+- **Real-time Connection Monitoring**: Live status of watch connections in GUI
+- **Synchronized Data Recording**: Video and IMU data perfectly aligned with timestamps
+- **CSV Data Export**: IMU data automatically retrieved and saved as CSV files
+- **Session-based Organization**: Combined video + IMU data stored in organized session folders
+- **Enhanced GUI**: Additional controls for watch management and IMU status
+
+**How It Works:**
+1. Connects to Watch OS apps running on left and right wrist watches via Wi-Fi
+2. When stillness is detected, simultaneously starts IMU recording on both watches
+3. Records video as usual (preceding X seconds before stillness)
+4. After video recording completes, stops IMU recording and retrieves data
+5. Saves everything in organized session folders with synchronized timestamps
+
+**Watch OS App Requirements:**
+Your Watch OS apps must implement these HTTP endpoints:
+- `GET /ping` - Health check
+- `GET /start` - Start IMU recording
+- `GET /stop` - Stop IMU recording
+- `GET /data` - Retrieve recorded IMU data as JSON
+- `GET /info` - Get watch information
+
+**Expected IMU Data Format:**
+```json
+[
+  {
+    "timestamp": 1692345678.123,
+    "accel_x": 0.1, "accel_y": 0.2, "accel_z": 9.8,
+    "gyro_x": 0.01, "gyro_y": 0.02, "gyro_z": 0.03
+  }
+]
+```
+
+**Usage:**
+```bash
+# Auto-discover watches on network
+python3 run_stillness_recorder_with_imu.py --discover
+
+# Manual watch configuration
+python3 run_stillness_recorder_with_imu.py --left-watch 192.168.1.101 --right-watch 192.168.1.102
+
+# Use preset configurations optimized for juggling
+python3 run_stillness_recorder_with_imu.py --preset juggling  # 15s video, 2.5s stillness
+python3 run_stillness_recorder_with_imu.py --preset demo      # 8s video, 2.0s stillness
+python3 run_stillness_recorder_with_imu.py --preset test      # 5s video, 1.5s stillness
+
+# Disable IMU functionality (original behavior)
+python3 run_stillness_recorder_with_imu.py --no-imu
+```
+
+**Testing Watch Setup:**
+```bash
+# Interactive testing interface
+python3 test_watch_imu_setup.py --mode interactive
+
+# Auto-discovery test
+python3 test_watch_imu_setup.py --mode auto
+
+# Manual connection test
+python3 test_watch_imu_setup.py --mode manual --left-watch 192.168.1.101 --right-watch 192.168.1.102
+```
+
+**Output Structure:**
+```
+recordings/
+└── session_20250815_104530/
+    ├── clip_104545.mp4                    # Video recording
+    └── imu_data/
+        └── imu_session_20250815_104545/
+            ├── left_watch_imu.csv         # Left wrist IMU data
+            └── right_watch_imu.csv        # Right wrist IMU data
+```
+
+**IMU CSV Format:**
+```csv
+timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,watch_name
+1692345678.123,0.1,0.2,9.8,0.01,0.02,0.03,left
+1692345678.133,0.15,0.25,9.75,0.015,0.025,0.035,left
+```
+
+**Enhanced GUI Controls:**
+- **Watch Connection Panel**: Configure left and right watch IP addresses
+- **Discovery Button**: Automatically find watches on network
+- **Connection Status**: Real-time display of watch connectivity and recording status
+- **IMU Status Overlay**: Live IMU connection status in video display
+- **All original stillness recorder controls**
+
+**Keyboard Controls (Additional):**
+- `i` - Show detailed IMU status in console
+- All original stillness recorder keyboard shortcuts
+
+**Network Setup:**
+1. Ensure watches and computer are on the same Wi-Fi network
+2. Install and run the custom Watch OS IMU app on both watches
+3. Note the IP addresses displayed by the watch apps
+4. Use discovery mode or manually configure IPs in the application
+
+**Troubleshooting:**
+- **Connection Issues**: Verify Wi-Fi network, check firewall (port 8080), test with browser
+- **IMU Data Issues**: Ensure 100Hz recording rate, verify JSON format, check timestamps
+- **Sync Issues**: Use test script to verify watch app functionality
+
+**Requirements:**
+- All original stillness recorder requirements plus:
+- **requests** library for HTTP communication
+- **Custom Watch OS apps** running on both watches
+- **Wi-Fi network** connecting watches and computer
+
+_(Added: 2025-08-15)_
+
 ## Setup and Installation
 
 (Instructions for setup and installation will be added here)
@@ -240,8 +366,15 @@ python3 test_stillness_recorder.py
 -   `motion_detector`: Advanced motion detection using background subtraction and frame differencing.
 -   `circular_frame_buffer`: Thread-safe circular buffer for storing recent video frames with timestamps.
 -   `stillness_recorder`: Main application for motion-triggered video recording.
+-   `stillness_recorder_headless`: Headless version for server/automated environments.
+-   `stillness_recorder_with_imu`: Enhanced version with Watch OS IMU integration.
 -   `run_stillness_recorder`: Runner script with preset configurations.
+-   `run_stillness_recorder_with_imu`: Enhanced runner with IMU support and presets.
 -   `test_stillness_recorder`: Comprehensive test suite for all stillness recorder components.
+
+### Watch IMU Integration Modules
+-   `watch_imu_manager`: Core module for Watch OS IMU communication and data management.
+-   `test_watch_imu_setup`: Testing and validation tools for Watch OS app connectivity.
 
 ## Contributing
 
