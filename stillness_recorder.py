@@ -50,9 +50,9 @@ class ControlsWindow:
         try:
             self.root = tk.Tk()
             self.root.title("Stillness Recorder Controls")
-            self.root.geometry("600x700")
+            self.root.geometry("800x900")
             self.root.resizable(True, True)
-            self.root.minsize(500, 600)
+            self.root.minsize(700, 800)
             
             # Configure the root window to expand properly
             self.root.columnconfigure(0, weight=1)
@@ -63,94 +63,94 @@ class ControlsWindow:
             print(f"✗ Error creating controls window root: {e}")
             return
         
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Main frame with smaller padding
+        main_frame = ttk.Frame(self.root, padding="5")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure main frame to expand
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
         
-        # Title
+        # Title with smaller font and padding
         title_label = ttk.Label(main_frame, text="STILLNESS RECORDER CONTROLS",
-                               font=("Arial", 18, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 30))
+                               font=("Arial", 14, "bold"))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 15))
         
-        # Record Duration
+        # Record Duration with smaller font and padding
         ttk.Label(main_frame, text="Record Duration (seconds):",
-                 font=("Arial", 14)).grid(row=1, column=0, sticky=tk.W, pady=10)
+                 font=("Arial", 11)).grid(row=1, column=0, sticky=tk.W, pady=5)
         self.record_duration_var = tk.StringVar(value=str(int(self.recorder.record_duration)))
-        record_entry = ttk.Entry(main_frame, textvariable=self.record_duration_var, width=15, font=("Arial", 12))
-        record_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(15, 0), pady=10)
+        record_entry = ttk.Entry(main_frame, textvariable=self.record_duration_var, width=12, font=("Arial", 10))
+        record_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Update",
-                  command=self.update_record_duration).grid(row=1, column=2, padx=(15, 0), pady=10)
+                  command=self.update_record_duration).grid(row=1, column=2, padx=(10, 0), pady=5)
         
-        # Motion Threshold (for detecting significant movement)
+        # Motion Threshold with smaller font and padding
         ttk.Label(main_frame, text="Motion Threshold (movement):",
-                 font=("Arial", 14)).grid(row=2, column=0, sticky=tk.W, pady=10)
+                 font=("Arial", 11)).grid(row=2, column=0, sticky=tk.W, pady=5)
         self.motion_threshold_var = tk.StringVar(value=str(int(self.recorder.motion_threshold)))
-        motion_entry = ttk.Entry(main_frame, textvariable=self.motion_threshold_var, width=15, font=("Arial", 12))
-        motion_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(15, 0), pady=10)
+        motion_entry = ttk.Entry(main_frame, textvariable=self.motion_threshold_var, width=12, font=("Arial", 10))
+        motion_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Update",
-                  command=self.update_motion_threshold).grid(row=2, column=2, padx=(15, 0), pady=10)
+                  command=self.update_motion_threshold).grid(row=2, column=2, padx=(10, 0), pady=5)
         
-        # Stillness Threshold (for detecting when motion stops)
+        # Stillness Threshold with smaller font and padding
         ttk.Label(main_frame, text="Stillness Threshold (stop):",
-                 font=("Arial", 14)).grid(row=3, column=0, sticky=tk.W, pady=10)
+                 font=("Arial", 11)).grid(row=3, column=0, sticky=tk.W, pady=5)
         self.stillness_threshold_var = tk.StringVar(value=str(int(self.recorder.stillness_threshold)))
-        stillness_thresh_entry = ttk.Entry(main_frame, textvariable=self.stillness_threshold_var, width=15, font=("Arial", 12))
-        stillness_thresh_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(15, 0), pady=10)
+        stillness_thresh_entry = ttk.Entry(main_frame, textvariable=self.stillness_threshold_var, width=12, font=("Arial", 10))
+        stillness_thresh_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Update",
-                  command=self.update_stillness_threshold).grid(row=3, column=2, padx=(15, 0), pady=10)
+                  command=self.update_stillness_threshold).grid(row=3, column=2, padx=(10, 0), pady=5)
         
-        # Stillness Duration
+        # Stillness Duration with smaller font and padding
         ttk.Label(main_frame, text="Stillness Trigger (1/10ths sec):",
-                 font=("Arial", 14)).grid(row=4, column=0, sticky=tk.W, pady=10)
+                 font=("Arial", 11)).grid(row=4, column=0, sticky=tk.W, pady=5)
         self.stillness_duration_var = tk.StringVar(value=str(int(self.recorder.stillness_duration * 10)))
-        stillness_entry = ttk.Entry(main_frame, textvariable=self.stillness_duration_var, width=15, font=("Arial", 12))
-        stillness_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(15, 0), pady=10)
+        stillness_entry = ttk.Entry(main_frame, textvariable=self.stillness_duration_var, width=12, font=("Arial", 10))
+        stillness_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Update",
-                  command=self.update_stillness_duration).grid(row=4, column=2, padx=(15, 0), pady=10)
+                  command=self.update_stillness_duration).grid(row=4, column=2, padx=(10, 0), pady=5)
         
-        # Separator
+        # Separator with smaller padding
         ttk.Separator(main_frame, orient='horizontal').grid(row=5, column=0, columnspan=3,
-                                                           sticky=(tk.W, tk.E), pady=20)
+                                                           sticky=(tk.W, tk.E), pady=10)
         
-        # Current Values Display
+        # Current Values Display with smaller font and padding
         ttk.Label(main_frame, text="CURRENT VALUES",
-                 font=("Arial", 16, "bold")).grid(row=6, column=0, columnspan=3, pady=(20, 15))
+                 font=("Arial", 12, "bold")).grid(row=6, column=0, columnspan=3, pady=(10, 8))
         
-        self.current_record_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.current_record_label.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.current_record_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.current_record_label.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        self.current_motion_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.current_motion_label.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.current_motion_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.current_motion_label.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        self.current_stillness_thresh_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.current_stillness_thresh_label.grid(row=9, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.current_stillness_thresh_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.current_stillness_thresh_label.grid(row=9, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        self.current_stillness_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.current_stillness_label.grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.current_stillness_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.current_stillness_label.grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        # Session Info
+        # Session Info with smaller font and padding
         ttk.Separator(main_frame, orient='horizontal').grid(row=11, column=0, columnspan=3,
-                                                           sticky=(tk.W, tk.E), pady=25)
+                                                           sticky=(tk.W, tk.E), pady=15)
         
         ttk.Label(main_frame, text="SESSION INFO",
-                 font=("Arial", 16, "bold")).grid(row=12, column=0, columnspan=3, pady=(0, 15))
+                 font=("Arial", 12, "bold")).grid(row=12, column=0, columnspan=3, pady=(0, 8))
         
-        self.recordings_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.recordings_label.grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.recordings_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.recordings_label.grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        self.movement_label = ttk.Label(main_frame, text="", font=("Arial", 12))
-        self.movement_label.grid(row=14, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self.movement_label = ttk.Label(main_frame, text="", font=("Arial", 10))
+        self.movement_label.grid(row=14, column=0, columnspan=3, sticky=tk.W, pady=3)
         
-        # Control Buttons
+        # Control Buttons with smaller padding
         ttk.Separator(main_frame, orient='horizontal').grid(row=15, column=0, columnspan=3,
-                                                           sticky=(tk.W, tk.E), pady=20)
+                                                           sticky=(tk.W, tk.E), pady=10)
         
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=16, column=0, columnspan=3, pady=10)
+        button_frame.grid(row=16, column=0, columnspan=3, pady=5)
         
         ttk.Button(button_frame, text="Manual Record",
                   command=self.manual_record).pack(side=tk.LEFT, padx=5)
@@ -362,9 +362,9 @@ class StillnessRecorder:
         # Controls window
         self.controls_window = None
         
-        # Display settings - reasonable window size to prevent stretching
-        self.display_width = 1280
-        self.display_height = 720
+        # Display settings - doubled dimensions for better visibility
+        self.display_width = 2560
+        self.display_height = 1440
         
         # Input mode tracking
         self.input_mode = None  # None, 'record_duration', 'motion_threshold', 'stillness_duration'

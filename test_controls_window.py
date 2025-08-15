@@ -23,6 +23,7 @@ def test_controls_window():
             def __init__(self):
                 self.record_duration = 10.0
                 self.motion_threshold = 1000
+                self.stillness_threshold = 500
                 self.stillness_duration = 3.0
                 self.total_recordings = 0
                 self.has_detected_movement = False
