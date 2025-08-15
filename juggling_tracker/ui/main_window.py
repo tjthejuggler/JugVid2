@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QScrollArea, QSlider
 )
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QIcon, QAction, QPainter, QPen, QColor, QFontMetrics
-from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QPoint, pyqtSignal, pyqtSlot, QDateTime
 
 # Application's module imports
 from juggling_tracker.modules.ball_definer import BallDefiner
@@ -80,6 +80,11 @@ class MainWindow(QMainWindow):
         
         # Initialize simple tracking window reference
         self.simple_tracking_window = None
+
+        # Feed source state
+        self.current_feed_mode = 'live' # 'live' or 'playback'
+        self.current_video_path = None
+        self.is_app_recording = False # Tracks app's recording state
         
         # Set up the UI
         self.setup_ui()
@@ -164,7 +169,56 @@ class MainWindow(QMainWindow):
         self.simple_tracking_settings_btn = QPushButton("Simple Tracking Settings")
         self.simple_tracking_settings_btn.clicked.connect(self.open_simple_tracking_settings)
         
+        # Create Feed Source GroupBox
+        self.feed_source_group = QGroupBox("Feed Source")
+        self.feed_source_layout = QFormLayout() # Using QFormLayout for label-widget pairs
+
+        self.feed_mode_combo = QComboBox()
+        self.feed_mode_combo.addItems(["Live Feed (Camera)", "Recorded Feed (Video)"])
+        self.feed_mode_combo.currentIndexChanged.connect(self.on_feed_mode_changed)
+        self.feed_source_layout.addRow("Feed Mode:", self.feed_mode_combo)
+
+        self.select_video_button = QPushButton("Select Video File...")
+        self.select_video_button.clicked.connect(self.select_video_file)
+        self.select_video_button.setEnabled(False) # Initially disabled for Live Feed
+        self.video_path_label = QLabel("No video selected")
+        self.video_path_label.setWordWrap(True)
+        
+        video_file_layout = QHBoxLayout()
+        video_file_layout.addWidget(self.select_video_button)
+        video_file_layout.addWidget(self.video_path_label)
+        self.feed_source_layout.addRow(video_file_layout)
+        
+        self.feed_source_group.setLayout(self.feed_source_layout)
+
+        # Create Recording GroupBox
+        self.recording_group = QGroupBox("Recording (RealSense .bag)")
+        self.recording_layout = QFormLayout()
+
+        self.start_record_button = QPushButton("Start Recording")
+        self.start_record_button.clicked.connect(self.handle_start_recording)
+        self.stop_record_button = QPushButton("Stop Recording")
+        self.stop_record_button.clicked.connect(self.handle_stop_recording)
+        self.stop_record_button.setEnabled(False)
+
+        self.recording_status_label = QLabel("Status: Not Recording")
+        self.recording_status_label.setWordWrap(True)
+
+        record_buttons_layout = QHBoxLayout()
+        record_buttons_layout.addWidget(self.start_record_button)
+        record_buttons_layout.addWidget(self.stop_record_button)
+        
+        self.recording_layout.addRow(record_buttons_layout)
+        self.recording_layout.addRow("File:", self.recording_status_label)
+        self.recording_group.setLayout(self.recording_layout)
+        
+        # Initial check for recording controls enable state
+        self.update_recording_controls_state()
+
+
         # Add all groups to main layout
+        self.main_layout.addWidget(self.feed_source_group)
+        self.main_layout.addWidget(self.recording_group) # Add recording group
         self.main_layout.addWidget(self.ball_controls_container)
         self.main_layout.addWidget(self.simple_tracking_settings_btn)
         self.main_layout.addWidget(self.tracked_balls_scroll)
@@ -345,6 +399,7 @@ class MainWindow(QMainWindow):
         """
         # Create toolbar
         self.toolbar = QToolBar("Main Toolbar", self)
+        self.toolbar.setObjectName("MainToolbar") # For QMainWindow::saveState warning
         self.toolbar.setMovable(True)
         self.toolbar.setFloatable(False)
         self.addToolBar(self.toolbar)
@@ -788,15 +843,43 @@ class MainWindow(QMainWindow):
         self.show_fps = settings.value("show_fps", True, type=bool)
         self.show_extension_results = settings.value("show_extension_results", True, type=bool)
         
+        # Restore feed source settings
+        self.current_feed_mode = settings.value("feed_mode", "live", type=str)
+        self.current_video_path = settings.value("video_path", None, type=str)
+
         # Update actions to match settings
         self.toggle_color_action.setChecked(self.show_color)
         self.toggle_depth_action.setChecked(self.show_depth)
         self.toggle_masks_action.setChecked(self.show_masks)
         self.toggle_simple_tracking_action.setChecked(self.show_simple_tracking)
+        self.toggle_simple_tracking_mask_action.setChecked(self.show_simple_tracking_mask) # Added this line
         self.toggle_debug_action.setChecked(self.debug_mode)
         self.toggle_fps_action.setChecked(self.show_fps)
         self.toggle_extensions_action.setChecked(self.show_extension_results)
+
+        # Update feed mode UI based on loaded settings from QSettings
+        # We will not trigger app mode switches here.
+        # App will initialize to its default/arg-specified mode.
+        # sync_ui_to_app_state() will be called later by JugglingTracker to align UI.
+
+        if self.current_feed_mode == "playback":
+            self.feed_mode_combo.blockSignals(True) # Prevent premature signal on_feed_mode_changed
+            self.feed_mode_combo.setCurrentIndex(1)
+            self.feed_mode_combo.blockSignals(False)
+            self.select_video_button.setEnabled(True)
+            if self.current_video_path:
+                self.video_path_label.setText(os.path.basename(self.current_video_path))
+            else:
+                self.video_path_label.setText("No video selected")
+        else: # live
+            self.feed_mode_combo.blockSignals(True)
+            self.feed_mode_combo.setCurrentIndex(0)
+            self.feed_mode_combo.blockSignals(False)
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("")
         
+        # self.update_recording_controls_state() will be called by sync_ui_to_app_state
+
         # Update the defined balls list if app is available
         if self.app and hasattr(self.app, 'ball_profile_manager'):
             self.update_defined_balls_list()
@@ -822,6 +905,10 @@ class MainWindow(QMainWindow):
         settings.setValue("debug_mode", self.debug_mode)
         settings.setValue("show_fps", self.show_fps)
         settings.setValue("show_extension_results", self.show_extension_results)
+
+        # Save feed source settings
+        settings.setValue("feed_mode", self.current_feed_mode)
+        settings.setValue("video_path", self.current_video_path)
     
     def closeEvent(self, event):
         """
@@ -1423,3 +1510,211 @@ class MainWindow(QMainWindow):
         """Update the position display in the simple tracking window if it's open."""
         if self.simple_tracking_window is not None:
             self.simple_tracking_window.update_tracking_position_display(simple_tracking_result)
+
+    def on_feed_mode_changed(self, index):
+        """
+        Handle changes in the feed mode combo box.
+        """
+        if index == 0: # Live Feed
+            self.current_feed_mode = "live"
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("") # Clear video path label
+            if self.app and hasattr(self.app, 'switch_to_live_mode'):
+                self.app.switch_to_live_mode()
+            self.status_bar.showMessage("Switched to Live Feed mode.", 3000)
+        elif index == 1: # Recorded Feed
+            self.current_feed_mode = "playback"
+            self.select_video_button.setEnabled(True)
+            if self.current_video_path:
+                self.video_path_label.setText(os.path.basename(self.current_video_path))
+                if self.app and hasattr(self.app, 'switch_to_playback_mode'):
+                    self.app.switch_to_playback_mode(self.current_video_path)
+                self.status_bar.showMessage(f"Switched to Recorded Feed. Video: {os.path.basename(self.current_video_path)}", 3000)
+            else:
+                self.video_path_label.setText("No video selected")
+                self.status_bar.showMessage("Switched to Recorded Feed. Select a video file.", 3000)
+                # Optionally, prompt to select a file immediately
+                # self.select_video_file()
+        self.update_recording_controls_state() # Update recording button states based on new mode
+
+    def select_video_file(self):
+        """
+        Open a dialog to select a video file for playback.
+        """
+        # Sensible default directory could be user's Videos folder or last used path
+        # For now, using self.config_dir as a placeholder if no better option.
+        # A more robust approach would save/load last used video directory.
+        start_dir = os.path.dirname(self.current_video_path) if self.current_video_path else self.config_dir
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Video File", start_dir,
+            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
+        )
+        
+        if file_path:
+            self.current_video_path = file_path
+            self.video_path_label.setText(os.path.basename(file_path))
+            if self.app and hasattr(self.app, 'switch_to_playback_mode'):
+                self.app.switch_to_playback_mode(self.current_video_path)
+            self.status_bar.showMessage(f"Selected video: {os.path.basename(file_path)}", 3000)
+        else:
+            self.status_bar.showMessage("Video selection cancelled.", 3000)
+        self.update_recording_controls_state()
+
+    def handle_start_recording(self):
+        """
+        Handle the "Start Recording" button click.
+        Prompts for a .bag file path and tells the app to start recording.
+        """
+        if not self.app or not hasattr(self.app, 'start_video_recording'):
+            self.status_bar.showMessage("Error: Recording function not available in app.", 3000)
+            return
+
+        # Check if currently in live RealSense mode
+        if not (self.app.frame_acquisition and self.app.frame_acquisition.mode == 'live'):
+            QMessageBox.warning(self, "Recording Error", "Recording is only available when in Live Feed (Camera) mode with a RealSense camera active.")
+            return
+
+        # Suggest a filename, e.g., in config_dir or a dedicated recordings directory
+        default_dir = os.path.join(self.config_dir, "recordings")
+        os.makedirs(default_dir, exist_ok=True)
+        default_filename = os.path.join(default_dir, f"recording_{QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss')}.bag")
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save RealSense Recording", default_filename, "BAG files (*.bag)"
+        )
+
+        if filepath:
+            if not filepath.endswith(".bag"):
+                filepath += ".bag"
+            self.app.start_video_recording(filepath)
+            # UI update will be handled by update_recording_status callback from JugglingTracker
+
+    def handle_stop_recording(self):
+        """
+        Handle the "Stop Recording" button click.
+        Tells the app to stop recording.
+        """
+        if not self.app or not hasattr(self.app, 'stop_video_recording'):
+            self.status_bar.showMessage("Error: Recording function not available in app.", 3000)
+            return
+        
+        self.app.stop_video_recording()
+        # UI update will be handled by update_recording_status callback
+
+    def update_recording_status(self, is_recording, filepath=None):
+        """
+        Callback for JugglingTracker to update the UI about recording status.
+        """
+        self.is_app_recording = is_recording
+        if is_recording:
+            self.start_record_button.setEnabled(False)
+            self.stop_record_button.setEnabled(True)
+            self.feed_mode_combo.setEnabled(False) # Disable mode switching during recording
+            self.select_video_button.setEnabled(False)
+            base_filepath = os.path.basename(filepath) if filepath else "Unknown file"
+            self.recording_status_label.setText(f"Status: Recording to {base_filepath}")
+            self.status_bar.showMessage(f"Recording to {base_filepath}...", 0) # Persistent message
+        else:
+            self.start_record_button.setEnabled(True)
+            self.stop_record_button.setEnabled(False)
+            self.feed_mode_combo.setEnabled(True) # Re-enable mode switching
+            # select_video_button state depends on feed_mode_combo, handled by on_feed_mode_changed
+            self.on_feed_mode_changed(self.feed_mode_combo.currentIndex()) # Refresh video button state
+            
+            final_message = "Status: Not Recording"
+            if filepath: # This means recording just stopped
+                final_message = f"Status: Recording stopped. Saved to {os.path.basename(filepath)}"
+                self.status_bar.showMessage(f"Recording saved: {os.path.basename(filepath)}", 5000)
+            else: # Recording failed to start or general update
+                 self.status_bar.clearMessage() # Or restore previous message
+
+            self.recording_status_label.setText(final_message)
+        self.update_recording_controls_state()
+
+
+    def update_recording_controls_state(self):
+        """
+        Enables or disables recording controls based on current feed mode and app state.
+        """
+        can_record = False
+        if self.app and hasattr(self.app, 'is_realsense_live_active'):
+            can_record = self.app.is_realsense_live_active
+
+        # Recording is only possible if live RealSense is active AND we are in "Live Feed" mode UI-wise.
+        # The self.current_feed_mode check ensures UI consistency.
+        allow_recording_controls = (self.current_feed_mode == "live") and can_record
+
+        if self.is_app_recording: # If app says it's recording
+            self.start_record_button.setEnabled(False)
+            self.stop_record_button.setEnabled(allow_recording_controls) # Should be true if recording
+            self.feed_mode_combo.setEnabled(False) # Don't allow mode switch while recording
+            self.select_video_button.setEnabled(False)
+        else: # Not currently recording
+            self.start_record_button.setEnabled(allow_recording_controls)
+            self.stop_record_button.setEnabled(False)
+            self.feed_mode_combo.setEnabled(True) # Allow mode switch
+            # select_video_button state depends on current feed_mode_combo selection
+            if self.feed_mode_combo.currentIndex() == 1: # "Recorded Feed"
+                self.select_video_button.setEnabled(True)
+            else:
+                self.select_video_button.setEnabled(False)
+
+    def sync_ui_to_app_state(self):
+        """
+        Synchronizes the UI elements (like feed mode combo) with the actual
+        state of the JugglingTracker application's frame_acquisition module.
+        This is crucial after app initialization or mode changes that might involve fallbacks.
+        """
+        if not self.app or not hasattr(self.app, 'frame_acquisition'):
+            print("[MainWindow] sync_ui_to_app_state: App or frame_acquisition not available.")
+            return
+
+        app_fa_mode = self.app.frame_acquisition.mode
+        app_video_path = getattr(self.app.frame_acquisition, 'video_path', None) # For playback
+
+        print(f"[MainWindow] sync_ui_to_app_state: App FA mode='{app_fa_mode}', App video_path='{app_video_path}'")
+
+        # Block signals to prevent on_feed_mode_changed from firing during sync
+        self.feed_mode_combo.blockSignals(True)
+
+        if app_fa_mode == 'playback':
+            self.current_feed_mode = "playback"
+            self.feed_mode_combo.setCurrentIndex(1) # "Recorded Feed (Video)"
+            self.select_video_button.setEnabled(True)
+            self.current_video_path = app_video_path # Sync video path
+            if self.current_video_path:
+                self.video_path_label.setText(os.path.basename(self.current_video_path))
+            else:
+                self.video_path_label.setText("No video selected")
+        elif app_fa_mode == 'live': # RealSense
+            self.current_feed_mode = "live"
+            self.feed_mode_combo.setCurrentIndex(0) # "Live Feed (Camera)"
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("")
+        elif app_fa_mode == 'live_webcam': # Webcam
+            # Assuming 'Live Feed (Camera)' also covers webcam for simplicity in this UI.
+            # If a dedicated "Webcam" option were in the combo, we'd select that.
+            self.current_feed_mode = "live" # Treat as 'live' for UI's current_feed_mode logic
+            self.feed_mode_combo.setCurrentIndex(0) # "Live Feed (Camera)"
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("")
+        else:
+            print(f"[MainWindow] sync_ui_to_app_state: Unknown app_fa_mode '{app_fa_mode}'")
+            # Default to live if mode is unknown
+            self.current_feed_mode = "live"
+            self.feed_mode_combo.setCurrentIndex(0)
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("")
+
+        self.feed_mode_combo.blockSignals(False)
+
+        # Crucially, update recording controls based on the now-synced state
+        self.update_recording_controls_state()
+
+        # Update recording status display based on app's actual recording state
+        if hasattr(self.app, 'is_currently_recording') and \
+           hasattr(self.app.frame_acquisition, 'recording_filepath'):
+            self.update_recording_status(self.app.is_currently_recording, self.app.frame_acquisition.recording_filepath)
+        
+        print(f"[MainWindow] sync_ui_to_app_state: UI synced. current_feed_mode='{self.current_feed_mode}', combo_index={self.feed_mode_combo.currentIndex()}")

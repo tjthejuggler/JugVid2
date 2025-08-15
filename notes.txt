@@ -1,6 +1,17 @@
 If pyrealsense2 gives a pipeline error:
 export PYTHONPATH=~/Projects/librealsense/build/Release:$PYTHONPATH
+this should be in path now and no longer an issue
 
 Juggling python/cv programs
 -Watches Juggling and colors balls based on balls that are in the same orbits
 -figures out siteswap from watching
+
+juggle_hero(JugVid2)
+basic version is just that it tracks the average position of all balls and it makes an indication color(maybe on the screen or on the balls) and when i get to that place, it shows the next color. score can be how many i can do in X time.
+-eventually it could make the places that it sends me be based on music(for this it would mean that i can "miss" places/beats and so the scoring will have to be more complicated)
+
+Juggling game
+with colored balls and a camera, when balls become a certain color you have to quickly do something like go to an extreme corner.
+
+JugVid2
+-I need to test the ability to create a video and then use it with the new video based simulation mode

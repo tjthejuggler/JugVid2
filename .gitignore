@@ -111,3 +111,5 @@ venv.bak/
 
 # Project specific
 juggling_tracker/config/*.json
+
+/recordings

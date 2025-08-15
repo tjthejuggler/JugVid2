@@ -1,314 +1,252 @@
-# Juggling Tracker
+# JugVid2 - Computer Vision Projects
 
-A robust juggling ball tracking system that uses a RealSense depth camera to track multiple juggling balls and the juggler's hands in real-time.
+A collection of computer vision applications using Intel RealSense depth cameras, including juggling ball tracking and face balance timing.
 
-*Last updated: 2025-05-30 16:57 (UTC+7) - Enhanced simple tracking with expanded parameter ranges and new visualization mask view*
+## Projects
 
-## Features
+### 1. Juggling Tracker
+A robust juggling ball tracking system using Intel RealSense depth cameras.
 
-- Track 3-5 different colored juggling balls in real-time
-- Track the juggler's hands
-- **Simple tracking mode** for getting average position of close objects
-- Configurable proximity thresholds and object size filters
-- **Flexible video view options**: Toggle between color, depth, and proximity mask views independently
-- **View-only mode**: Option to show only the proximity mask for focused tracking analysis
-- Save and load color calibrations for different environments
-- Extensible architecture for adding new functionality
-- Simple UI with a menu bar for file operations and color calibration management
-- Fallback modes for webcam and simulation when RealSense camera is not available
+**Features:**
+- Real-time juggling ball tracking using color and depth data.
+- Skeleton detection for hand position estimation.
+- Blob detection and filtering for ball identification.
+- Color calibration for balls.
+- Ball profile management for defining and saving different types of juggling balls.
+- Multi-ball tracking with Kalman filters.
+- Simple tracking mode for basic object following.
+- Extensible architecture for adding custom processing modules.
+- Qt-based graphical user interface.
+- **Video Playback Mode**:
+    - The application can play back standard video files (e.g., .mp4, .avi) as a simulated live feed. This is useful for testing tracking algorithms without a live camera.
+    - To use, select "Recorded Feed (Video)" from the "Feed Source" panel and choose a video file. The video will loop automatically.
+    - Note: Standard video files do not contain depth data, so depth-dependent features will be limited in this mode.
+- **RealSense BAG File Recording**:
+    - The application can record color and depth streams from a connected RealSense camera into a `.bag` file.
+    - This allows capturing full sensor data for later analysis or playback (Note: Direct playback of `.bag` files with depth data within this application is a potential future enhancement).
+    - To use, ensure "Live Feed (Camera)" is active with a RealSense camera. Use the "Start Recording" button in the "Recording" panel, choose a save location for the `.bag` file. Click "Stop Recording" to finalize the file.
+    - _(Updated: 2025-05-31)_
 
-## Requirements
+### 2. Face Balance Timer ⭐ IMPROVED!
+An automatic timer for face balancing exercises using pose detection with advanced state management.
 
-- Python 3.6+
-- Intel RealSense camera (optional, can use webcam or simulation mode)
-- OpenCV
-- NumPy
-- PyRealSense2 (optional, only needed for RealSense camera)
-- MediaPipe
+**Features:**
+- **Smart State Machine**: Prevents timer from triggering too often with proper cooldown periods
+- **Larger Display**: Increased window size (1280x720) with very large timer display during timing
+- **Database Storage**: All session data stored in SQLite database with timestamps and session tracking
+- **Session Graphs**: Automatic performance graphs shown when program closes
+- **Minimal Terminal Output**: Reduced noise, only essential messages displayed
+- **Automatic Start/Stop**: Timer starts when arms go down to sides, stops when hand goes above head
+- **RealSense Integration**: Uses color-only stream to avoid bandwidth issues, with webcam fallback
+- **Pose Detection**: Uses MediaPipe for accurate skeletal tracking, with motion-based fallback when unavailable
+- **Audio Feedback**: Distinct sound effects - high pitch (800Hz) for start, low pitch (400Hz) for stop
+- **Session Tracking**: Records all attempts, tracks best times, and provides detailed session summaries
 
-## Installation
+**State Machine Logic:**
+1. **WAITING**: Put arms down to prepare
+2. **READY_TO_START**: Arms are down, timer will start immediately
+3. **TIMING**: Timer is running, raise hand to stop
+4. **COOLDOWN**: 2-second cooldown prevents immediate restart
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/juggling-tracker.git
-   cd juggling-tracker
-   ```
+**Usage:**
+```bash
+python3 run_face_balance_timer.py
+```
 
-2. Install the required dependencies:
-    ```
-    pip install -r requirements.txt
-    ```
+**Controls:**
+- Put both arms down at your sides to start the timer
+- Raise one hand above your head to stop the timer
+- Wait for cooldown period before next attempt
+- Press 'r' to reset session
+- Press 'q' to quit
 
-3. Make sure your RealSense camera is connected to your computer (if using RealSense mode).
+**Technical Details:**
+- Uses RealSense color-only stream (1280x720 @ 30fps) for larger, clearer display
+- Falls back to motion-based pose detection when MediaPipe is unavailable
+- Automatic webcam fallback if RealSense fails
+- SQLite database stores all session data with timestamps
+- Matplotlib graphs show session performance and time distribution
+- State machine prevents false triggers and ensures proper timing flow
+
+**Requirements:**
+- RealSense camera (uses color-only stream) or regular webcam
+- OpenCV for video processing
+- MediaPipe for pose detection (optional, falls back to motion detection)
+- SQLite3 for database storage
+- Matplotlib for session graphs
+- speaker-test for audio feedback (with fallback to system beep)
+
+_(Added: 2025-08-12, Updated: 2025-08-12)_
+
+### 3. Stillness Recorder ⭐ IMPROVED!
+A motion-triggered video recorder that automatically saves video clips when stillness is detected.
+
+**Features:**
+- **Automatic Recording**: Records the preceding X seconds of video when stillness is detected
+- **Motion Detection**: Uses advanced background subtraction and frame differencing for robust motion detection
+- **Circular Buffer**: Efficiently stores recent frames in memory for instant recording
+- **Configurable Parameters**: Adjustable recording duration, motion threshold, and stillness duration
+- **Real-time Display**: Shows live video feed with motion statistics and recording status (1280x720 resolution)
+- **RealSense Integration**: Uses RealSense color-only stream for optimal performance
+- **Interactive Controls**: Keyboard shortcuts and GUI controls window for real-time parameter adjustment
+- **Multiple Presets**: Quick, Normal, and Sensitive presets for different use cases
+- **Memory Optimized**: Fixed memory leaks and improved performance for long-running sessions
+- **GUI Controls Window**: Dedicated tkinter window with text input fields for easy parameter adjustment
+
+**How It Works:**
+1. Continuously monitors video feed for motion
+2. When motion drops below threshold for specified duration, triggers recording
+3. Saves the last X seconds of video (before stillness was detected) to MP4 file
+4. Perfect for capturing moments just before an object comes to rest
+
+**Usage:**
+```bash
+# Run with default settings
+python3 run_stillness_recorder.py
+
+# Run with preset configurations
+python3 run_stillness_recorder.py --preset quick      # 5s recording, 2s stillness
+python3 run_stillness_recorder.py --preset normal     # 10s recording, 3s stillness
+python3 run_stillness_recorder.py --preset sensitive  # 15s recording, 5s stillness
+
+# Run with custom parameters
+python3 stillness_recorder.py --record-duration 8 --motion-threshold 800 --stillness-duration 2.5
+```
+
+**Keyboard Controls:**
+- `q` - Quit application
+- `h` - Toggle help display
+- `m` - Toggle motion mask view
+- `r` - Manual recording trigger
+- `c` - Clear motion detector state
+- `+/-` - Increase/decrease motion threshold
+- `[/]` - Decrease/increase record duration
+
+**Configuration Options:**
+- **Record Duration**: How many seconds of video to save (1-60 seconds)
+- **Motion Threshold**: Sensitivity for motion detection (lower = more sensitive)
+- **Stillness Duration**: How long stillness must be maintained to trigger recording
+- **Output Directory**: Where to save recorded video files
+
+**Use Cases:**
+- Recording juggling catches when balls come to rest
+- Capturing the moment objects stop moving
+- Automated surveillance recording
+- Sports analysis for stationary moments
+- Scientific experiments requiring motion cessation detection
+
+**Technical Details:**
+- Uses MOG2 background subtraction with frame differencing backup
+- Circular buffer stores frames with timestamps for precise timing
+- Multi-threaded video saving to prevent UI blocking
+- MP4 output format with configurable FPS
+- Real-time motion statistics and buffer utilization display
+
+**Requirements:**
+- RealSense camera (color-only stream) or webcam fallback
+- OpenCV for video processing and motion detection
+- NumPy for frame processing
+- Threading support for background video saving
+- Tkinter for GUI controls window
+
+**Recent Improvements (2025-08-15):**
+- Fixed video stretching issue by correcting display dimensions (now 1280x720)
+- Fixed memory leaks by optimizing tkinter event processing and frame resizing
+- Improved circular buffer management with proper cleanup
+- Enhanced controls window layout for better visibility
+- Added proper exception handling and resource cleanup
+- Reduced CPU usage through optimized frame processing
+
+_(Added: 2025-08-15, Updated: 2025-08-15)_
+
+## Setup and Installation
+
+(Instructions for setup and installation will be added here)
 
 ## Usage
 
-1. Run the application using the provided script:
-    ```
-    ./run.sh
-    ```
-
-    This script automatically sets up the required PYTHONPATH for the librealsense library.
-
-2. Command-line options:
-   ```
-   python run_juggling_tracker.py --help
-   ```
-
-   Available options:
-   - `--config-dir PATH`: Directory to save configuration files
-   - `--no-realsense`: Disable RealSense camera
-   - `--webcam`: Use webcam instead of RealSense
-   - `--simulation`: Use simulation mode
-   - `--camera-index INDEX`: Index of the webcam to use (default: 0)
-
-3. Calibrate the balls:
-   - Click on "Calibration" in the menu bar, then "New Ball"
-   - Enter a name for the ball (e.g., "Red Ball")
-   - Toss the ball back and forth in the camera's view
-   - The system will automatically detect the ball and learn its color
-   - Repeat for each ball you want to track
-
-4. Save the calibration:
-   - Click on "File" in the menu bar, then "Save Calibration"
-   - Enter a name for the calibration set (e.g., "Living Room Lighting")
-
-5. Load a saved calibration:
-   - Click on "File" in the menu bar, then "Load Calibration"
-   - Select the calibration set you want to load
-
-6. Track balls:
-   - Once calibrated, the system will automatically track the balls
-   - Each ball will be highlighted with a circle and labeled with its name
-   - Hand positions will be marked with different symbols
-
-7. Use extensions:
-   - Click on "Extensions" in the menu bar
-   - Enable or disable available extensions
-   - Extension results will be displayed in the UI
-
-## Keyboard Shortcuts
-
-- `q` or `ESC`: Quit the application
-- `p`: Pause/resume processing
-- `c`: Toggle color view
-- `d`: Toggle depth view
-- `m`: Toggle masks view
-- `s`: Toggle simple tracking overlay
-- `t`: Toggle simple tracking mask view
-- `b`: Toggle debug mode
-- `f`: Toggle FPS display
-- `e`: Toggle extension results display
-- `r`: Reset tracking
-
-## Simple Tracking Feature
-
-The simple tracking feature provides a basic way to track the average position of close objects in the scene. This is useful for getting a general sense of where juggling balls are located before implementing more sophisticated individual ball tracking.
-
-### Features:
-- **Average Position Calculation**: Calculates the centroid of all objects considered "close" based on depth
-- **Temporal Smoothing**: Averages positions across multiple frames for stability
-- **Confidence Scoring**: Provides reliability metrics for tracking results
-- **Position Jump Detection**: Identifies and handles sudden position changes
-- **Noise Reduction**: Morphological operations and Gaussian blur for cleaner masks
-- **Preset Configurations**: Pre-configured settings for different environments (Indoor, Outdoor, Stable, Default)
-- **Settings Persistence**: Save and load custom tracking configurations
-- **Real-time Position Display**: Shows current tracking coordinates, confidence, and stability scores
-- **Visual Overlay**: Shows average position with cyan cross and circle, individual objects with magenta dots
-- **Real-time Statistics**: Displays object count and total area
-
-### Simple Tracking Settings Window
-
-The simple tracking controls are now located in a separate, dedicated settings window accessible via the "Simple Tracking Settings" button in the main window. This provides a clean, organized interface for fine-tuning the tracking system:
-
-**Basic Controls:**
-- **Proximity Threshold**: Distance threshold for object detection (0.05m - 0.50m)
-- **Min/Max Object Size**: Size filtering to eliminate noise and irrelevant objects (10px - 10000px)
-
-**Advanced Settings:**
-- **Temporal Smoothing**: Number of frames to average for position stability (1-500 frames) - *Expanded range for long-term averaging*
-- **Max Position Jump**: Maximum allowed position change between frames (10-1000px) - *Expanded range for varied tracking scenarios*
-- **Confidence Threshold**: Minimum confidence required for valid tracking (0.0-1.0)
-- **Noise Reduction**: Morphological operations kernel size (0-50px) - *Expanded range for heavy noise filtering*
-- **Blur Radius**: Gaussian blur for mask preprocessing (0-25px) - *Expanded range for stronger smoothing*
-
-**Presets:**
-- **Indoor**: Optimized for controlled indoor lighting
-- **Outdoor**: Adapted for variable outdoor conditions
-- **Stable**: Maximum stability with heavy smoothing
-- **Default**: Balanced settings for general use
-
-**Settings Management:**
-- **Save Settings**: Export current configuration to JSON file
-- **Load Settings**: Import previously saved configurations
-
-**Simple Tracking Mask View:**
-- **Independent View**: Completely separate from the proximity mask view - can be shown alone or alongside other views
-- **Show Simple Tracking Mask**: Toggle button to display a dedicated visualization of the simple tracking processing
-- **Real-time Visualization**: Generates its own proximity mask with tracking overlays
-- **Visual Elements**:
-  - White areas: Objects detected within proximity threshold
-  - Green contours: Valid objects (after size and perimeter filtering)
-  - Magenta circles: Individual object centers with numbering
-  - Cyan cross and circle: Current average position with coordinates
-  - Orange circle: Smoothed/stable position (if different from average)
-  - Parameter display: Shows current tracking settings and statistics
-- **Live Parameter Feedback**: All slider changes are immediately reflected in the mask view
-- **Flexible Display**: Can be shown without enabling the regular proximity mask view
-
-**Position Display:**
-The tracking position panel shows real-time data that extensions can access:
-- Current position coordinates (same as `stable_position` in extension data)
-- Confidence score (0.0-1.0)
-- Stability score (0.0-1.0)
-
-**Window Behavior:**
-- The settings window can be opened and closed independently of the main window
-- Settings remain active even when the window is closed
-- All parameter changes take effect immediately
-- The window is non-modal, allowing interaction with both windows simultaneously
-
-### Controls:
-- **Simple Tracking Settings Button**: Opens the dedicated settings window
-- **Toggle Simple Tracking**: Use 'S' key or View menu to show/hide the overlay on main video
-- **Toggle Simple Tracking Mask**: Use 'T' key or View → "Toggle Simple Tracking Mask" menu to show/hide the dedicated tracking visualization
-- **Simple Tracking Mask View**: Also available as toggle button in settings window
-- **Video View Toggles**: Use 'C', 'D', 'M' keys to toggle color, depth, and mask views independently
-
-### Usage:
-1. Enable simple tracking from the View menu or press 'S'
-2. Click "Simple Tracking Settings" to open the settings window
-3. **Enable Simple Tracking Mask View**: Click "Show Simple Tracking Mask" for real-time visualization
-4. Adjust the proximity threshold to focus on objects at the right distance
-5. Set min/max object sizes to filter out noise and background objects
-6. Fine-tune advanced parameters:
-   - **Temporal smoothing**: Use up to 500 frames for very stable long-term averaging
-   - **Position jump detection**: Set higher thresholds for fast-moving objects
-   - **Noise reduction**: Use larger kernel sizes for noisy environments
-7. **Real-time feedback**: Watch the tracking mask view update as you adjust sliders
-8. **For focused analysis**: Use the dedicated tracking mask view alongside or instead of the main video feeds
-9. The cyan cross shows the average position with coordinates displayed
-10. Individual objects are marked with numbered magenta circles
-11. Orange markers show smoothed positions when different from raw average
-
-This feature is designed as a stepping stone toward more advanced individual ball tracking and can be used by extensions for basic position data. The ability to view only the proximity mask is particularly useful for fine-tuning the tracking parameters.
-
-## Fallback Modes
-
-The application supports three modes of operation:
-
-1. **RealSense Mode** (default): Uses the Intel RealSense depth camera for tracking. This provides the best results with accurate depth information.
-
-2. **Webcam Mode**: Uses a standard webcam for tracking. This mode doesn't have real depth information, so tracking may be less accurate.
-
-3. **Simulation Mode**: Generates simulated balls and hands for testing. This mode doesn't require any camera.
-
-If the RealSense camera is not available, the application will automatically try to fall back to webcam mode, and if that fails, to simulation mode.
-
-You can explicitly select a mode using the command-line options:
-```
-python run_juggling_tracker.py --webcam
-python run_juggling_tracker.py --simulation
+### Juggling Tracker
+Run the juggling tracker using:
+```bash
+python run_juggling_tracker.py
 ```
 
-## Architecture
-
-The system is built with a modular architecture that separates concerns and allows for easy extension and modification.
-
-### Core Components
-
-1. **Frame Acquisition Module**: Handles the camera setup and frame capture
-2. **Depth Processing Module**: Processes depth data to identify potential ball candidates
-3. **Skeleton Detection Module**: Detects the juggler's skeleton and extracts hand positions
-4. **Blob Detection Module**: Detects potential ball candidates in the filtered depth mask
-5. **Simple Tracker Module**: Provides basic tracking of average object positions
-6. **Color Calibration Module**: Handles the calibration of ball colors
-7. **Ball Identification Module**: Identifies which blob corresponds to which ball
-8. **Multi-Ball Tracking Module**: Tracks multiple balls in 3D space
-9. **Visualization Module**: Displays the tracking results and UI elements
-10. **UI Manager**: Handles the user interface for the application
-11. **Extension Manager**: Manages the registration and execution of extensions
-
-## Extending the System
-
-The system is designed to be extensible, with clear entry points for adding new functionality.
-
-### Creating a New Extension
-
-1. Create a new Python file in the `juggling_tracker/extensions` directory
-2. Define a class that inherits from `Extension`
-3. Implement the required methods:
-   - `initialize()`: Initialize the extension
-   - `process_frame(frame_data)`: Process a frame of data
-   - `get_results()`: Get the results of the extension
-   - `get_name()`: Get the name of the extension
-4. The extension will be automatically discovered and can be enabled/disabled from the UI
-
-Example:
-
-```python
-from juggling_tracker.extensions.extension_manager import Extension
-
-class MyExtension(Extension):
-    def __init__(self):
-        self.count = 0
-    
-    def initialize(self):
-        return True
-    
-    def process_frame(self, frame_data):
-        # Process the frame data
-        self.count += 1
-        return {'count': self.count}
-    
-    def get_results(self):
-        return {'count': self.count}
-    
-    def get_name(self):
-        return "MyExtension"
+Or directly:
+```bash
+python juggling_tracker/main.py [arguments]
 ```
 
-## Included Extensions
+### Face Balance Timer
+Run the face balance timer using:
+```bash
+python3 run_face_balance_timer.py
+```
 
-The system comes with two example extensions:
+### Stillness Recorder
+Run the stillness recorder using:
+```bash
+# Quick start with default settings
+python3 run_stillness_recorder.py
 
-1. **Catch Counter**: Counts the number of catches and drops in a juggling pattern
-2. **Siteswap Detector**: Analyzes ball trajectories to determine the siteswap pattern
+# With preset configurations
+python3 run_stillness_recorder.py --preset quick
+python3 run_stillness_recorder.py --preset normal
+python3 run_stillness_recorder.py --preset sensitive
 
-## Future Extensions
+# With custom parameters
+python3 stillness_recorder.py --record-duration 10 --motion-threshold 1000 --stillness-duration 3
+```
 
-The system is designed to be extended with new functionality, such as:
+### Testing
+Run component tests to verify everything is working:
+```bash
+python3 test_stillness_recorder.py
+```
 
-1. **Improved Siteswap Detection**: More accurate pattern recognition with validation
-2. **Training Mode**: Guide users through juggling exercises
-3. **Pattern Consistency Rating**: Analyze the consistency of juggling patterns
-4. **Trick Recognition**: Identify common juggling tricks
-5. **Multi-Person Tracking**: Track multiple jugglers simultaneously
+### Command-Line Arguments:
+-   `--config-dir <path>`: Directory to save/load configuration files.
+-   `--no-realsense`: Disable RealSense camera (attempts webcam or other fallbacks).
+-   `--webcam`: Force use of a webcam.
+-   `--camera-index <index>`: Specify the webcam index (default: 0).
+-   `--simulation`: Enable video playback mode. Requires `--video-path`.
+-   `--video-path <path>`: Path to the video file to be used in playback mode.
 
-## Troubleshooting
+### UI Controls:
+-   **Feed Source Panel**:
+    -   **Feed Mode**: Switch between "Live Feed (Camera)" and "Recorded Feed (Video)".
+    -   **Select Video File...**: Appears when "Recorded Feed" is selected; allows choosing a video for playback.
+-   **Recording Panel**:
+    -   **Start Recording**: Appears when "Live Feed" with a RealSense camera is active; prompts for a `.bag` file location and starts recording.
+    -   **Stop Recording**: Stops the current recording.
+    -   Status labels indicate recording state and file path.
+-   Other UI controls for ball definition, calibration, view toggles, etc.
 
-### RealSense Camera Issues
+## Modules
 
-If you encounter issues with the RealSense camera, try the following:
+### Core Modules
+-   `frame_acquisition`: Handles camera input (RealSense, Webcam, Video File, BAG File Recording).
+-   `color_only_frame_acquisition`: Simplified RealSense color-only stream acquisition.
+-   `depth_processor`: Processes depth data.
+-   `skeleton_detector`: Detects human skeletons and hand positions.
+-   `blob_detector`: Detects potential ball-like objects (blobs).
+-   `color_calibration`: Manages color profiles for ball identification.
+-   `ball_identifier`: Identifies balls based on color and other features.
+-   `multi_ball_tracker`: Tracks multiple balls over time.
+-   `simple_tracker`: Provides basic object tracking based on masks.
+-   `ui`: Contains Qt-based UI components (`main_window`, etc.).
+-   `extensions`: Framework for adding plugins and extensions.
 
-1. Make sure the RealSense SDK is installed correctly
-2. Try running the application with the `--webcam` or `--simulation` option to use a fallback mode
-3. If you have a custom build of librealsense, the application will automatically try to find it in `~/Projects/librealsense/build/Release`
+### Stillness Recorder Modules
+-   `motion_detector`: Advanced motion detection using background subtraction and frame differencing.
+-   `circular_frame_buffer`: Thread-safe circular buffer for storing recent video frames with timestamps.
+-   `stillness_recorder`: Main application for motion-triggered video recording.
+-   `run_stillness_recorder`: Runner script with preset configurations.
+-   `test_stillness_recorder`: Comprehensive test suite for all stillness recorder components.
 
-### Webcam Issues
+## Contributing
 
-If you encounter issues with the webcam, try the following:
-
-1. Make sure your webcam is connected and working
-2. Try a different webcam index with the `--camera-index` option
-3. Try running the application in simulation mode with the `--simulation` option
+(Guidelines for contributing will be added here)
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Intel for the RealSense SDK
-- OpenCV for the computer vision algorithms
-- MediaPipe for the skeleton detection
+This project is licensed under the MIT License - see the [LICENSE](LICENSE:1) file for details.
