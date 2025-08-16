@@ -569,7 +569,8 @@ class StillnessRecorderWithIMU:
                  camera_height=720,
                  camera_fps=30,
                  enable_imu=True,
-                 watch_ips=None):
+                 watch_ips=None,
+                 manual_mode=False):
         """Initialize the enhanced stillness recorder with IMU support."""
         
         # Initialize base recorder properties (same as original)
@@ -578,6 +579,7 @@ class StillnessRecorderWithIMU:
         self.stillness_threshold = stillness_threshold
         self.stillness_duration = stillness_duration
         self.output_dir = output_dir
+        self.manual_mode = manual_mode
         
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -610,6 +612,12 @@ class StillnessRecorderWithIMU:
         
         # Movement tracking
         self.has_detected_movement = False
+        
+        # Manual recording state
+        self.manual_recording_active = False
+        self.manual_recording_start_time = None
+        self.manual_recording_thread = None
+        self.stop_manual_recording_flag = False
         
         # UI state
         self.show_motion_mask = False
@@ -645,8 +653,11 @@ class StillnessRecorderWithIMU:
         """Initialize camera and IMU components."""
         print("Initializing Enhanced Stillness Recorder with IMU...")
         print(f"Record Duration: {self.record_duration}s")
-        print(f"Motion Threshold: {self.motion_threshold}")
-        print(f"Stillness Duration: {self.stillness_duration}s")
+        if self.manual_mode:
+            print("Manual Mode: Motion detection DISABLED")
+        else:
+            print(f"Motion Threshold: {self.motion_threshold}")
+            print(f"Stillness Duration: {self.stillness_duration}s")
         print(f"Session Directory: {self.session_dir}")
         print(f"IMU Enabled: {self.enable_imu}")
         
@@ -691,28 +702,72 @@ class StillnessRecorderWithIMU:
         return camera_success
     
     def get_frames(self):
-        """Get frames from camera (same as original)."""
+        """Get frames from camera with improved error handling."""
         if self.using_webcam:
             ret, color_image = self.webcam.read()
             if ret:
                 return None, None, None, color_image
             else:
+                print("DEBUG: Webcam frame read failed")
                 return None, None, None, None
         else:
-            depth_frame, color_frame, depth_image, color_image = self.color_frame_acquisition.get_frames()
+            # Pass recording mode flag to optimize frame acquisition during recording
+            recording_mode = self.recording_in_progress or self.manual_recording_active
+            depth_frame, color_frame, depth_image, color_image = self.color_frame_acquisition.get_frames(recording_mode=recording_mode)
             
-            if color_image is None and not self.using_webcam:
-                self.webcam = cv2.VideoCapture(0)
-                if self.webcam.isOpened():
-                    self.webcam.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
-                    self.webcam.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
-                    self.webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
-                    self.webcam.set(cv2.CAP_PROP_FPS, self.camera_fps)
-                    self.using_webcam = True
-                    self.using_color_only = False
-                    ret, color_image = self.webcam.read()
-                    if ret:
-                        return None, None, None, color_image
+            # Track consecutive RealSense failures
+            if color_image is None:
+                if not hasattr(self, '_realsense_failure_count'):
+                    self._realsense_failure_count = 0
+                self._realsense_failure_count += 1
+                
+                # During recording, be more tolerant of failures - only fallback after 5 minutes
+                failure_threshold = 9000 if (self.recording_in_progress or self.manual_recording_active) else 900
+                
+                # Only consider fallback after many consecutive failures
+                if self._realsense_failure_count > failure_threshold and not self.using_webcam:
+                    duration_text = "5+ minutes" if failure_threshold == 9000 else "30+ seconds"
+                    print(f"⚠️  RealSense has failed for {duration_text}, attempting webcam fallback...")
+                    # Stop RealSense first to avoid conflicts
+                    self.color_frame_acquisition.stop()
+                    
+                    self.webcam = cv2.VideoCapture(0)
+                    if self.webcam.isOpened():
+                        # Set camera properties to match RealSense resolution to avoid size mismatch
+                        actual_width = getattr(self.color_frame_acquisition, 'width', self.camera_width)
+                        actual_height = getattr(self.color_frame_acquisition, 'height', self.camera_height)
+                        
+                        self.webcam.set(cv2.CAP_PROP_FRAME_WIDTH, actual_width)
+                        self.webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, actual_height)
+                        self.webcam.set(cv2.CAP_PROP_FPS, self.camera_fps)
+                        
+                        # Give camera time to initialize
+                        time.sleep(0.1)
+                        
+                        self.using_webcam = True
+                        self.using_color_only = False
+                        print(f"✅ Successfully switched to webcam mode ({actual_width}x{actual_height})")
+                        
+                        # Try to get first frame
+                        ret, color_image = self.webcam.read()
+                        if ret:
+                            # Resize webcam frame to match RealSense resolution if needed
+                            if color_image.shape[:2] != (actual_height, actual_width):
+                                color_image = cv2.resize(color_image, (actual_width, actual_height))
+                            return None, None, None, color_image
+                        else:
+                            print("⚠️  Initial webcam frame read failed")
+                    else:
+                        print("❌ Failed to open webcam as fallback")
+                
+                # Return None to indicate no frame available, but don't switch cameras yet
+                return None, None, None, None
+            else:
+                # Reset failure count on successful frame
+                if hasattr(self, '_realsense_failure_count'):
+                    if self._realsense_failure_count > 100:  # Only log recovery for significant failures
+                        print(f"✅ RealSense recovered after {self._realsense_failure_count} failed attempts")
+                    self._realsense_failure_count = 0
                         
             return depth_frame, color_frame, depth_image, color_image
     
@@ -738,18 +793,20 @@ class StillnessRecorderWithIMU:
         # Detect motion
         motion_value, is_motion, motion_mask = self.motion_detector.detect_motion(frame)
         
-        # Track significant movement to ignore first stillness
-        if motion_value > self.motion_threshold:
-            self.has_detected_movement = True
-        
-        # Check for stillness trigger (only after movement has been detected)
+        # In manual mode, skip motion detection logic
         stillness_triggered = False
-        if self.has_detected_movement:
-            stillness_triggered = self.motion_detector.check_stillness(motion_value)
+        if not self.manual_mode:
+            # Track significant movement to ignore first stillness
+            if motion_value > self.motion_threshold:
+                self.has_detected_movement = True
             
-            # Handle recording trigger
-            if stillness_triggered and not self.recording_in_progress:
-                self.trigger_recording()
+            # Check for stillness trigger (only after movement has been detected)
+            if self.has_detected_movement:
+                stillness_triggered = self.motion_detector.check_stillness(motion_value)
+                
+                # Handle recording trigger
+                if stillness_triggered and not self.recording_in_progress:
+                    self.trigger_recording()
         
         # Get motion statistics
         motion_stats = self.motion_detector.get_motion_stats()
@@ -778,7 +835,16 @@ class StillnessRecorderWithIMU:
         bg_color = (0, 0, 0)  # Black background
         
         # Motion status colors
-        if not self.has_detected_movement:
+        if self.manual_mode:
+            if self.recording_in_progress or self.manual_recording_active:
+                motion_color = (0, 0, 255)  # Red - recording
+                status_text = "RECORDING - SPACEBAR TO STOP"
+                status_color = (0, 0, 255)
+            else:
+                motion_color = (0, 255, 0)  # Green - ready
+                status_text = "READY - SPACEBAR TO START"
+                status_color = (0, 255, 0)
+        elif not self.has_detected_movement:
             motion_color = (128, 128, 128)  # Gray - waiting for movement
             status_text = "WAITING FOR MOVEMENT"
             status_color = (128, 128, 128)
@@ -810,31 +876,32 @@ class StillnessRecorderWithIMU:
         cv2.rectangle(frame, (text_x - 20, text_y - 35), (text_x + text_size[0] + 20, text_y + 10), bg_color, -1)
         cv2.putText(frame, status_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, status_color, thickness)
         
-        # Motion value bar
-        bar_width = 300
-        bar_height = 20
-        bar_x = (w - bar_width) // 2
-        bar_y = 70
-        
-        # Background bar
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (50, 50, 50), -1)
-        
-        # Motion level bar
-        max_scale = max(self.motion_threshold * 2, 3000)
-        motion_ratio = min(motion_value / max_scale, 1.0)
-        fill_width = int(bar_width * motion_ratio)
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), motion_color, -1)
-        
-        # Threshold markers
-        stillness_x = bar_x + int(bar_width * (self.stillness_threshold / max_scale))
-        cv2.line(frame, (stillness_x, bar_y), (stillness_x, bar_y + bar_height), (0, 0, 255), 2)
-        
-        motion_x = bar_x + int(bar_width * (self.motion_threshold / max_scale))
-        cv2.line(frame, (motion_x, bar_y), (motion_x, bar_y + bar_height), (255, 255, 255), 2)
-        
-        # Motion value text
-        cv2.putText(frame, f"Motion: {motion_value:.0f} | Still: {self.stillness_threshold:.0f} | Move: {self.motion_threshold:.0f}",
-                   (bar_x, bar_y + bar_height + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
+        # Motion value bar (only show in automatic mode)
+        if not self.manual_mode:
+            bar_width = 300
+            bar_height = 20
+            bar_x = (w - bar_width) // 2
+            bar_y = 70
+            
+            # Background bar
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (50, 50, 50), -1)
+            
+            # Motion level bar
+            max_scale = max(self.motion_threshold * 2, 3000)
+            motion_ratio = min(motion_value / max_scale, 1.0)
+            fill_width = int(bar_width * motion_ratio)
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), motion_color, -1)
+            
+            # Threshold markers
+            stillness_x = bar_x + int(bar_width * (self.stillness_threshold / max_scale))
+            cv2.line(frame, (stillness_x, bar_y), (stillness_x, bar_y + bar_height), (0, 0, 255), 2)
+            
+            motion_x = bar_x + int(bar_width * (self.motion_threshold / max_scale))
+            cv2.line(frame, (motion_x, bar_y), (motion_x, bar_y + bar_height), (255, 255, 255), 2)
+            
+            # Motion value text
+            cv2.putText(frame, f"Motion: {motion_value:.0f} | Still: {self.stillness_threshold:.0f} | Move: {self.motion_threshold:.0f}",
+                       (bar_x, bar_y + bar_height + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
         
         # IMU Status overlay
         if self.enable_imu and self.imu_manager:
@@ -880,20 +947,23 @@ class StillnessRecorderWithIMU:
         cv2.putText(frame, f"Session: {os.path.basename(self.session_dir)}",
                    (15, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 1)
     
-    def trigger_recording(self):
+    def trigger_recording(self, manual=False):
         """Trigger a recording with enhanced synchronized IMU data."""
         if self.recording_in_progress:
             print("Recording already in progress, skipping trigger")
             return
         
-        print(f"Stillness detected! Triggering enhanced synchronized recording...")
+        if manual:
+            print(f"Manual recording triggered! Starting synchronized recording...")
+        else:
+            print(f"Stillness detected! Triggering enhanced synchronized recording...")
         
         # Use synchronized recording session if IMU is enabled and configured
         if self.enable_imu and self.imu_manager and self.imu_manager.watch_ips:
             print("🎬 Using synchronized recording session with IMU integration guide functionality")
             
             # Start synchronized recording session in a separate thread
-            recording_thread = threading.Thread(target=self._synchronized_recording_session)
+            recording_thread = threading.Thread(target=self._synchronized_recording_session, args=(manual,))
             recording_thread.daemon = True
             recording_thread.start()
         else:
@@ -913,63 +983,158 @@ class StillnessRecorderWithIMU:
             recording_thread.daemon = True
             recording_thread.start()
     
-    def _synchronized_recording_session(self):
+    def _synchronized_recording_session(self, manual=False):
         """Perform synchronized recording session using integration guide functionality."""
         self.recording_in_progress = True
         
+        # Store reference to this thread for manual stopping
+        if manual:
+            self.manual_recording_thread = threading.current_thread()
+            self.stop_manual_recording_flag = False
+        
         try:
-            # Get video frames for the recording window
-            all_frames = self.frame_buffer.get_all_frames()
+            if manual:
+                # Manual mode: record from current time
+                current_time = time.time()
+                recording_start_time = current_time
+                
+                # Generate sync_id first for coordination
+                session_timestamp = datetime.fromtimestamp(recording_start_time)
+                sync_id = session_timestamp.strftime("%Y%m%d_%H%M%S")
+                
+                # Start IMU recording (no duration limit - will be stopped manually)
+                if self.enable_imu and self.imu_manager:
+                    print(f"🎬 Starting manual IMU recording with ID: {sync_id}")
+                    # Start IMU recording without duration limit
+                    if hasattr(self.imu_manager, 'controller'):
+                        self.imu_manager.controller.start_recording_all()
+                    else:
+                        self.imu_manager.start_recording()
+                
+                # Record video until user stops (no duration limit in manual mode)
+                recording_frames = []
+                start_time = time.time()
+                frame_errors = 0
+                max_frame_errors = 300  # Allow many more frame errors during recording (10 seconds worth)
+                
+                print(f"🎬 Manual recording started - press SPACEBAR to stop")
+                
+                while True:
+                    # Check if user requested stop
+                    if self.stop_manual_recording_flag:
+                        print("🛑 Manual recording stopped by user")
+                        break
+                        
+                    # Get current frame
+                    depth_frame, color_frame, depth_image, color_image = self.get_frames()
+                    if color_image is not None:
+                        timestamp = time.time()
+                        recording_frames.append((timestamp, color_image))
+                        frame_errors = 0  # Reset error count on successful frame
+                    else:
+                        frame_errors += 1
+                        if frame_errors > max_frame_errors:
+                            print("⚠️  Too many frame errors, stopping recording")
+                            break
+                    
+                    time.sleep(1.0 / self.camera_fps)  # Maintain frame rate
+                
+                # Stop IMU recording when user stops
+                if self.enable_imu and self.imu_manager:
+                    print("🛑 Stopping IMU recording...")
+                    # Send stop command to watches
+                    if hasattr(self.imu_manager, 'controller'):
+                        self.imu_manager.controller.stop_recording_all()
+                    else:
+                        self.imu_manager.stop_recording()
+                    
+                    # Wait a moment for IMU to stop
+                    time.sleep(0.5)
+                    
+                    # Retrieve IMU data immediately with sync_id to same directory as video
+                    print(f"📥 Retrieving IMU data with sync_id: {sync_id}")
+                    self.imu_manager.current_sync_id = sync_id
+                    self.imu_manager._retrieve_imu_data(target_dir=self.session_dir)
+                
+                if not recording_frames:
+                    print("⚠️  No frames captured during manual recording (camera issues)")
+                    print("🎬 IMU data will still be saved if available")
+                    # Still try to save IMU data even if video failed
+                    if self.enable_imu and self.imu_manager:
+                        print(f"📥 Retrieving IMU data with sync_id: {sync_id}")
+                        self.imu_manager.current_sync_id = sync_id
+                        self.imu_manager._retrieve_imu_data(target_dir=self.session_dir)
+                    return
+                
+                # Calculate actual recording duration
+                actual_duration = recording_frames[-1][0] - recording_frames[0][0] if recording_frames else 0
+                print(f"📊 Manual recording duration: {actual_duration:.2f} seconds")
+                
+                filename = f"manual_{sync_id}.mp4"
+                
+            else:
+                # Automatic mode: use existing logic
+                all_frames = self.frame_buffer.get_all_frames()
+                
+                if not all_frames:
+                    print("No frames available for recording")
+                    return
+                
+                # Calculate recording window (same logic as original)
+                current_time = time.time()
+                motion_stats = self.motion_detector.get_motion_stats()
+                stillness_start_time = current_time - motion_stats['stillness_duration']
+                recording_start_time = stillness_start_time - self.record_duration
+                recording_end_time = stillness_start_time
+                
+                # Filter frames for the recording window
+                recording_frames = []
+                for timestamp, frame in all_frames:
+                    if recording_start_time <= timestamp <= recording_end_time:
+                        recording_frames.append((timestamp, frame))
+                
+                if not recording_frames:
+                    print("No frames found in the recording window")
+                    return
+                
+                # Generate synchronized filename
+                clip_start_time = datetime.fromtimestamp(recording_frames[0][0])
+                sync_id = clip_start_time.strftime("%Y%m%d_%H%M%S")
+                filename = f"auto_{sync_id}.mp4"
             
-            if not all_frames:
-                print("No frames available for recording")
-                return
-            
-            # Calculate recording window (same logic as original)
-            current_time = time.time()
-            motion_stats = self.motion_detector.get_motion_stats()
-            stillness_start_time = current_time - motion_stats['stillness_duration']
-            recording_start_time = stillness_start_time - self.record_duration
-            recording_end_time = stillness_start_time
-            
-            # Filter frames for the recording window
-            recording_frames = []
-            for timestamp, frame in all_frames:
-                if recording_start_time <= timestamp <= recording_end_time:
-                    recording_frames.append((timestamp, frame))
-            
-            if not recording_frames:
-                print("No frames found in the recording window")
-                return
-            
-            # Generate filename
-            clip_start_time = datetime.fromtimestamp(recording_frames[0][0])
-            clip_timestamp = clip_start_time.strftime("%H%M%S")
-            filename = f"clip_{clip_timestamp}.mp4"
-            
-            # Start synchronized IMU recording session
-            print(f"🎬 Starting synchronized IMU recording session ({self.record_duration}s)")
-            imu_success = self.imu_manager.synchronized_recording_session(duration=self.record_duration)
-            
-            # Save video simultaneously
+            # Save video (IMU already handled above for manual mode)
             session_recorder = FrameBufferRecorder(self.session_dir)
             output_path = session_recorder.save_frames_to_video(recording_frames, filename, fps=30)
             
-            if output_path and imu_success:
+            # For automatic mode, start IMU recording with duration
+            if not manual and self.enable_imu and self.imu_manager:
+                print(f"🎬 Starting synchronized IMU recording session ({self.record_duration}s)")
+                imu_success = self.imu_manager.synchronized_recording_session(duration=self.record_duration, sync_id=sync_id)
+            else:
+                imu_success = True  # Already handled for manual mode
+            
+            # Update recording count and report results
+            if output_path or imu_success:
                 self.total_recordings += 1
                 self.last_recording_time = time.time()
-                duration = recording_frames[-1][0] - recording_frames[0][0]
-                print(f"🎬 Synchronized recording completed successfully!")
-                print(f"📹 Video saved: {output_path}")
-                print(f"📊 Recorded {len(recording_frames)} frames ({duration:.2f}s)")
-                print(f"✅ IMU data synchronized and saved")
+                duration = recording_frames[-1][0] - recording_frames[0][0] if recording_frames else 0
+                mode_text = "Manual" if manual else "Automatic"
+                print(f"🎬 {mode_text} recording completed!")
+                
+                if output_path:
+                    print(f"📹 Video saved: {output_path}")
+                    print(f"📊 Recorded {len(recording_frames)} frames ({duration:.2f}s)")
+                else:
+                    print(f"⚠️  Video recording failed (camera issues)")
+                
+                if imu_success:
+                    print(f"✅ IMU data synchronized and saved")
+                else:
+                    print(f"⚠️  IMU data had issues")
+                    
                 print(f"📊 Total recordings this session: {self.total_recordings}")
-            elif output_path:
-                print(f"🎬 Video saved: {output_path}")
-                print(f"⚠️  IMU synchronization had issues")
-                self.total_recordings += 1
             else:
-                print("❌ Failed to save synchronized recording")
+                print("❌ Both video and IMU recording failed")
                 
         except Exception as e:
             print(f"❌ Error during synchronized recording: {e}")
@@ -977,6 +1142,12 @@ class StillnessRecorderWithIMU:
             traceback.print_exc()
         finally:
             self.recording_in_progress = False
+            self.manual_recording_active = False
+            self.manual_recording_thread = None
+            self.stop_manual_recording_flag = False
+            
+            # Reset for next recording
+            print("✅ Ready for next recording")
     
     def _save_recording(self):
         """Save the recording with synchronized IMU data."""
@@ -1043,17 +1214,27 @@ class StillnessRecorderWithIMU:
             self.recording_in_progress = False
     
     def handle_key_press(self, key):
-        """Handle keyboard input (same as original with IMU additions)."""
+        """Handle keyboard input with manual mode support."""
         if key == ord('q'):
             return False
         elif key == ord('h'):
             self.show_help = not self.show_help
-        elif key == ord('m'):
+        elif key == ord('m') and not self.manual_mode:
             self.show_motion_mask = not self.show_motion_mask
-        elif key == ord('r'):
-            print("🎬 Manual recording trigger")
-            self.trigger_recording()
-        elif key == ord('c'):
+        elif key == ord('r') or key == 32:  # 'r' or spacebar
+            if self.manual_mode:
+                if not self.recording_in_progress and not self.manual_recording_active:
+                    print("🎬 Starting manual recording...")
+                    self.manual_recording_active = True
+                    self.manual_recording_start_time = time.time()
+                    self.trigger_recording(manual=True)
+                elif self.recording_in_progress or self.manual_recording_active:
+                    print("🛑 Stopping manual recording...")
+                    self.stop_manual_recording()
+            else:
+                print("🎬 Manual recording trigger")
+                self.trigger_recording()
+        elif key == ord('c') and not self.manual_mode:
             print("🔄 Resetting movement detection")
             self.motion_detector.reset_stillness()
             self.has_detected_movement = False
@@ -1064,13 +1245,34 @@ class StillnessRecorderWithIMU:
         
         return True
     
+    def stop_manual_recording(self):
+        """Stop manual recording."""
+        if not self.manual_recording_active and not self.recording_in_progress:
+            print("⚠️  No manual recording in progress to stop")
+            return
+        
+        print("🛑 Stopping manual recording...")
+        self.stop_manual_recording_flag = True
+        
+        # Reset manual recording state immediately for UI responsiveness
+        self.manual_recording_active = False
+        
+        # If there's an active recording thread, let it know to stop
+        if hasattr(self, 'manual_recording_thread') and self.manual_recording_thread:
+            # The recording thread will check the flag and stop
+            pass
+    
     def run(self):
         """Main application loop with IMU integration."""
         if not self.initialize():
             return False
         
         print("\nEnhanced Stillness Recorder with IMU Started!")
-        print("The application will automatically record video and IMU data when stillness is detected.")
+        if self.manual_mode:
+            print("MANUAL MODE: Press SPACEBAR to start/stop recordings")
+            print("Video and IMU data will be recorded with synchronized filenames")
+        else:
+            print("The application will automatically record video and IMU data when stillness is detected.")
         print("Press 'h' for help, 'i' for IMU status, 'q' to quit")
         print("-" * 60)
         

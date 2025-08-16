@@ -19,8 +19,12 @@ def main():
     parser = argparse.ArgumentParser(description="Run Enhanced Stillness Recorder with IMU using Complete Python Integration Guide")
     
     # Preset configurations
-    parser.add_argument('--preset', choices=['juggling', 'demo', 'test'], default='juggling',
+    parser.add_argument('--preset', choices=['juggling', 'demo', 'test', 'manual'], default='juggling',
                        help='Use preset configuration (default: juggling)')
+    
+    # Manual mode
+    parser.add_argument('--manual', action='store_true',
+                       help='Enable manual recording mode (disables motion detection)')
     
     # Enhanced IMU arguments (from integration guide)
     parser.add_argument('--watch-ips', type=str, nargs='+', default=None,
@@ -69,7 +73,8 @@ def main():
             'camera_width': 1280,
             'camera_height': 720,
             'camera_fps': 30,
-            'output_dir': 'juggling_recordings'
+            'output_dir': 'juggling_recordings',
+            'manual_mode': False
         },
         'demo': {
             'record_duration': 8.0,
@@ -79,7 +84,8 @@ def main():
             'camera_width': 640,
             'camera_height': 480,
             'camera_fps': 30,
-            'output_dir': 'demo_recordings'
+            'output_dir': 'demo_recordings',
+            'manual_mode': False
         },
         'test': {
             'record_duration': 5.0,
@@ -89,9 +95,25 @@ def main():
             'camera_width': 640,
             'camera_height': 480,
             'camera_fps': 30,
-            'output_dir': 'test_recordings'
+            'output_dir': 'test_recordings',
+            'manual_mode': False
+        },
+        'manual': {
+            'record_duration': 10.0,
+            'motion_threshold': 0,  # Disabled in manual mode
+            'stillness_threshold': 0,  # Disabled in manual mode
+            'stillness_duration': 0,  # Disabled in manual mode
+            'camera_width': 1280,
+            'camera_height': 720,
+            'camera_fps': 30,
+            'output_dir': 'manual_recordings',
+            'manual_mode': True
         }
     }
+    
+    # Handle manual mode override
+    if args.manual:
+        args.preset = 'manual'
     
     # Get preset configuration
     config = presets[args.preset].copy()
@@ -103,9 +125,13 @@ def main():
     print(f"🚀 Starting Enhanced Stillness Recorder with '{args.preset}' preset")
     print(f"📁 Output directory: {config['output_dir']}")
     print(f"📹 Record duration: {config['record_duration']}s")
-    print(f"🎯 Motion threshold: {config['motion_threshold']}")
-    print(f"⏱️  Stillness duration: {config['stillness_duration']}s")
-    print(f"📱 IMU enabled: {not args.no_imu}")
+    if config['manual_mode']:
+        print("🎮 Manual recording mode: Motion detection DISABLED")
+        print("   Use SPACEBAR to start/stop recordings")
+    else:
+        print(f"🎯 Motion threshold: {config['motion_threshold']}")
+        print(f"⏱️  Stillness duration: {config['stillness_duration']}s")
+    print(f"📱 IMU enabled: {not args.disable_imu}")
     
     # Create enhanced recorder with integration guide functionality
     recorder = StillnessRecorderWithIMU(
@@ -118,7 +144,8 @@ def main():
         camera_height=config['camera_height'],
         camera_fps=config['camera_fps'],
         enable_imu=not args.disable_imu,
-        watch_ips=watch_ips
+        watch_ips=watch_ips,
+        manual_mode=config['manual_mode']
     )
     
     # Configure enhanced IMU if enabled
@@ -163,11 +190,15 @@ def main():
     print("\n" + "="*60)
     print("CONTROLS:")
     print("  q - Quit")
-    print("  r - Manual record trigger")
-    print("  c - Reset movement detection")
+    if config['manual_mode']:
+        print("  SPACEBAR - Start/Stop recording (Manual Mode)")
+        print("  r - Manual record trigger (alternative)")
+    else:
+        print("  r - Manual record trigger")
+        print("  c - Reset movement detection")
+        print("  m - Toggle motion mask")
     print("  i - Show IMU status")
     print("  h - Toggle help overlay")
-    print("  m - Toggle motion mask")
     print("="*60)
     
     # Run the recorder

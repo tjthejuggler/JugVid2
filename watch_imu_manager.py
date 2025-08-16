@@ -608,23 +608,30 @@ class WatchIMUManager:
             
             time.sleep(1.0)
     
-    def synchronized_recording_session(self, duration: float) -> bool:
+    def synchronized_recording_session(self, duration: float, sync_id: str = None) -> bool:
         """
         Perform a synchronized recording session (from integration guide).
         
         Args:
             duration: Recording duration in seconds
+            sync_id: Synchronization ID to match with video filename
             
         Returns:
             True if session completed successfully
         """
         logger.info(f"Starting synchronized recording session ({duration}s)")
         
-        # Create session directory
+        # Create session directory with sync_id if provided
         self.session_start_time = datetime.now()
-        session_name = f"imu_session_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}"
+        if sync_id:
+            session_name = f"imu_{sync_id}"
+        else:
+            session_name = f"imu_session_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}"
         self.session_dir = os.path.join(self.output_dir, session_name)
         os.makedirs(self.session_dir, exist_ok=True)
+        
+        # Store sync_id for filename generation
+        self.current_sync_id = sync_id
         
         # Use the controller for synchronized recording
         success = self.controller.synchronized_recording_session(duration)
@@ -632,7 +639,7 @@ class WatchIMUManager:
         if success:
             self.is_recording = False
             self.total_recordings += 1
-            # Retrieve data from watches
+            # Retrieve data from watches with synchronized naming
             self._retrieve_imu_data()
         
         return success
@@ -741,18 +748,25 @@ class WatchIMUManager:
             logger.error("❌ Failed to stop recording on any watch")
             return False
     
-    def _retrieve_imu_data(self):
+    def _retrieve_imu_data(self, target_dir=None):
         """Retrieve IMU data from all watches after recording stops."""
-        if not self.session_dir:
-            logger.error("No session directory available for data retrieval")
+        # Use target directory if provided, otherwise use session_dir
+        save_dir = target_dir or self.session_dir
+        
+        if not save_dir:
+            logger.error("No directory available for data retrieval")
             return
         
         logger.info("📥 Retrieving IMU data from watches...")
         
+        # Get sync_id for synchronized naming
+        sync_id = getattr(self, 'current_sync_id', None)
+        
         # Try to retrieve from controller first
         if self.controller.watch_ports:
-            for ip in self.controller.watch_ports:
-                self._retrieve_from_ip(ip)
+            for i, ip in enumerate(self.controller.watch_ports):
+                watch_name = f"watch_{i+1}"  # Generic naming for controller-based retrieval
+                self._retrieve_from_ip(ip, watch_name, sync_id, save_dir)
         
         # Also try individual watch connections
         for name, watch in self.watches.items():
@@ -763,14 +777,17 @@ class WatchIMUManager:
             try:
                 # Request data from watch
                 response = requests.get(
-                    watch.config.get_url("/data"), 
+                    watch.config.get_url("/data"),
                     timeout=10.0  # Longer timeout for data transfer
                 )
                 
                 if response.status_code == 200:
-                    # Save data to CSV file
-                    filename = f"{name}_watch_imu.csv"
-                    filepath = os.path.join(self.session_dir, filename)
+                    # Generate synchronized filename
+                    if sync_id:
+                        filename = f"{name}_{sync_id}.csv"
+                    else:
+                        filename = f"{name}_watch_imu.csv"
+                    filepath = os.path.join(save_dir, filename)
                     
                     # Parse JSON data and save as CSV
                     try:
@@ -789,7 +806,7 @@ class WatchIMUManager:
             except requests.RequestException as e:
                 logger.error(f"Error retrieving data from {name} watch: {e}")
     
-    def _retrieve_from_ip(self, ip: str):
+    def _retrieve_from_ip(self, ip: str, watch_name: str = None, sync_id: str = None, target_dir: str = None):
         """Retrieve data from a specific IP address."""
         try:
             port = self.controller.watch_ports.get(ip, self.default_port)
@@ -797,13 +814,22 @@ class WatchIMUManager:
             response = requests.get(url, timeout=10.0)
             
             if response.status_code == 200:
-                # Save data to CSV file
-                filename = f"watch_{ip.replace('.', '_')}_imu.csv"
-                filepath = os.path.join(self.session_dir, filename)
+                # Use target directory if provided, otherwise use session_dir
+                save_dir = target_dir or self.session_dir
+                
+                # Generate synchronized filename
+                if sync_id and watch_name:
+                    filename = f"{watch_name}_{sync_id}.csv"
+                elif sync_id:
+                    filename = f"watch_{ip.replace('.', '_')}_{sync_id}.csv"
+                else:
+                    filename = f"watch_{ip.replace('.', '_')}_imu.csv"
+                filepath = os.path.join(save_dir, filename)
                 
                 try:
                     imu_data = response.json()
-                    self._save_imu_data_to_csv(imu_data, filepath, f"watch_{ip}")
+                    device_name = watch_name or f"watch_{ip}"
+                    self._save_imu_data_to_csv(imu_data, filepath, device_name)
                     logger.info(f"✅ Retrieved IMU data from {ip}: {filepath}")
                 except json.JSONDecodeError:
                     # Fallback: save raw response
@@ -829,9 +855,14 @@ class WatchIMUManager:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             
             # Write header with session metadata
-            csvfile.write(f"# Session ID: {self.session_start_time.strftime('%Y%m%d_%H%M%S')}\n")
+            if self.session_start_time:
+                csvfile.write(f"# Session ID: {self.session_start_time.strftime('%Y%m%d_%H%M%S')}\n")
+                csvfile.write(f"# Start Time: {int(self.session_start_time.timestamp() * 1000)}\n")
+            else:
+                current_time = datetime.now()
+                csvfile.write(f"# Session ID: {current_time.strftime('%Y%m%d_%H%M%S')}\n")
+                csvfile.write(f"# Start Time: {int(current_time.timestamp() * 1000)}\n")
             csvfile.write(f"# Device ID: {watch_name}\n")
-            csvfile.write(f"# Start Time: {int(self.session_start_time.timestamp() * 1000)}\n")
             csvfile.write(f"# Sample Count: {len(imu_data)}\n")
             csvfile.write(f"# Generated by Watch IMU Recorder\n")
             
