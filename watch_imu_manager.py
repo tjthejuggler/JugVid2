@@ -762,49 +762,51 @@ class WatchIMUManager:
         # Get sync_id for synchronized naming
         sync_id = getattr(self, 'current_sync_id', None)
         
-        # Try to retrieve from controller first
+        # Prioritize controller-based retrieval if available (more reliable)
         if self.controller.watch_ports:
+            logger.info("Using controller-based data retrieval")
             for i, ip in enumerate(self.controller.watch_ports):
                 watch_name = f"watch_{i+1}"  # Generic naming for controller-based retrieval
                 self._retrieve_from_ip(ip, watch_name, sync_id, save_dir)
-        
-        # Also try individual watch connections
-        for name, watch in self.watches.items():
-            if not watch.is_connected:
-                logger.warning(f"Skipping data retrieval from disconnected {name} watch")
-                continue
-            
-            try:
-                # Request data from watch
-                response = requests.get(
-                    watch.config.get_url("/data"),
-                    timeout=10.0  # Longer timeout for data transfer
-                )
+        else:
+            # Fallback to individual watch connections only if controller is not available
+            logger.info("Using individual watch connection data retrieval")
+            for name, watch in self.watches.items():
+                if not watch.is_connected:
+                    logger.warning(f"Skipping data retrieval from disconnected {name} watch")
+                    continue
                 
-                if response.status_code == 200:
-                    # Generate synchronized filename
-                    if sync_id:
-                        filename = f"{name}_{sync_id}.csv"
-                    else:
-                        filename = f"{name}_watch_imu.csv"
-                    filepath = os.path.join(save_dir, filename)
+                try:
+                    # Request data from watch
+                    response = requests.get(
+                        watch.config.get_url("/data"),
+                        timeout=10.0  # Longer timeout for data transfer
+                    )
                     
-                    # Parse JSON data and save as CSV
-                    try:
-                        imu_data = response.json()
-                        self._save_imu_data_to_csv(imu_data, filepath, name)
-                        logger.info(f"✅ Retrieved IMU data from {name} watch: {filepath}")
-                    except json.JSONDecodeError:
-                        # Fallback: save raw response
-                        with open(filepath.replace('.csv', '.txt'), 'w') as f:
-                            f.write(response.text)
-                        logger.warning(f"⚠️  Saved raw data from {name} watch (JSON parse failed)")
+                    if response.status_code == 200:
+                        # Generate synchronized filename
+                        if sync_id:
+                            filename = f"{name}_{sync_id}.csv"
+                        else:
+                            filename = f"{name}_watch_imu.csv"
+                        filepath = os.path.join(save_dir, filename)
                         
-                else:
-                    logger.error(f"Failed to retrieve data from {name} watch: HTTP {response.status_code}")
-                    
-            except requests.RequestException as e:
-                logger.error(f"Error retrieving data from {name} watch: {e}")
+                        # Parse JSON data and save as CSV
+                        try:
+                            imu_data = response.json()
+                            self._save_imu_data_to_csv(imu_data, filepath, name)
+                            logger.info(f"✅ Retrieved IMU data from {name} watch: {filepath}")
+                        except json.JSONDecodeError:
+                            # Fallback: save raw response
+                            with open(filepath.replace('.csv', '.txt'), 'w') as f:
+                                f.write(response.text)
+                            logger.warning(f"⚠️  Saved raw data from {name} watch (JSON parse failed)")
+                            
+                    else:
+                        logger.error(f"Failed to retrieve data from {name} watch: HTTP {response.status_code}")
+                        
+                except requests.RequestException as e:
+                    logger.error(f"Error retrieving data from {name} watch: {e}")
     
     def _retrieve_from_ip(self, ip: str, watch_name: str = None, sync_id: str = None, target_dir: str = None):
         """Retrieve data from a specific IP address."""

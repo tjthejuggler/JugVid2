@@ -140,7 +140,9 @@ class ControlsWindowWithIMU:
         # Left Watch IP
         ttk.Label(main_frame, text="Left Watch IP:",
                  font=("Arial", 11)).grid(row=current_row, column=0, sticky=tk.W, pady=5)
-        self.left_watch_ip_var = tk.StringVar(value="192.168.1.101")
+        # Use the first provided IP or default
+        left_ip = self.recorder.watch_ips[0] if self.recorder.watch_ips else "192.168.1.101"
+        self.left_watch_ip_var = tk.StringVar(value=left_ip)
         left_ip_entry = ttk.Entry(main_frame, textvariable=self.left_watch_ip_var, width=15, font=("Arial", 10))
         left_ip_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Connect",
@@ -150,7 +152,9 @@ class ControlsWindowWithIMU:
         # Right Watch IP
         ttk.Label(main_frame, text="Right Watch IP:",
                  font=("Arial", 11)).grid(row=current_row, column=0, sticky=tk.W, pady=5)
-        self.right_watch_ip_var = tk.StringVar(value="192.168.1.102")
+        # Use the second provided IP or default
+        right_ip = self.recorder.watch_ips[1] if len(self.recorder.watch_ips) > 1 else "192.168.1.102"
+        self.right_watch_ip_var = tk.StringVar(value=right_ip)
         right_ip_entry = ttk.Entry(main_frame, textvariable=self.right_watch_ip_var, width=15, font=("Arial", 10))
         right_ip_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Connect",
