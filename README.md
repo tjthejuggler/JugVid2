@@ -2,6 +2,54 @@
 
 A collection of computer vision applications using Intel RealSense depth cameras, including juggling ball tracking and face balance timing.
 
+## 🚀 Quick Start with New Launcher
+
+**NEW (2025-08-18):** JugVid2 now features a unified command-line launcher for easy access to all applications!
+
+### Interactive Menu
+```bash
+python launcher.py
+```
+
+### Direct Application Launch
+```bash
+python launcher.py juggling    # Launch Juggling Tracker
+python launcher.py face        # Launch Face Balance Timer
+python launcher.py stillness   # Launch Stillness Recorder
+python launcher.py deps        # Check Dependencies
+python launcher.py info        # System Information
+```
+
+### Quick Help
+```bash
+python launcher.py --help      # Show launcher help
+python launcher.py --list      # List all applications
+```
+
+## 📁 Project Organization
+
+**REORGANIZED (2025-08-18):** The project has been completely reorganized for better maintainability:
+
+```
+JugVid2/
+├── 📁 apps/                    # Main applications
+│   ├── juggling_tracker/       # Advanced ball tracking
+│   ├── face_balance_timer/     # Balance timing exercise
+│   ├── stillness_recorder/     # Motion-triggered recording
+│   └── pose_detection/         # Pose detection tools
+├── 📁 core/                    # Core shared modules
+│   ├── camera/                 # Camera and frame acquisition
+│   ├── imu/                    # IMU and watch integration
+│   └── motion/                 # Motion detection
+├── 📁 tools/                   # Development tools
+│   ├── debug/                  # Debug and analysis
+│   ├── setup/                  # Installation scripts
+│   └── testing/                # Test suites
+├── 📁 docs/                    # Documentation
+├── 📁 data/                    # Data storage
+└── launcher.py                 # Main launcher interface
+```
+
 ## Projects
 
 ### 1. Juggling Tracker ⭐ ENHANCED with Real-time IMU!
@@ -533,61 +581,110 @@ pip install numpy opencv-python PyQt6 filterpy websockets requests mediapipe
 
 ## Usage
 
-### Juggling Tracker
-**Basic Usage:**
+### 🚀 New Unified Launcher (Recommended)
+
+**Interactive Menu:**
+```bash
+python launcher.py
+```
+
+**Direct Application Launch:**
+```bash
+python launcher.py juggling    # Juggling Tracker
+python launcher.py face        # Face Balance Timer
+python launcher.py stillness   # Stillness Recorder
+python launcher.py pose        # Pose Detection Tools
+python launcher.py debug       # Debug Tools
+python launcher.py setup       # Setup & Installation
+python launcher.py test        # Testing Suite
+python launcher.py deps        # Check Dependencies
+python launcher.py info        # System Information
+```
+
+### 📱 Individual Applications
+
+#### Juggling Tracker
+**Using Launcher (Recommended):**
+```bash
+python launcher.py 1           # Interactive menu for variants
+```
+
+**Direct Usage:**
 ```bash
 # Use webcam (recommended for testing)
-python run_juggling_tracker.py --webcam
+python apps/juggling_tracker/run_juggling_tracker.py --webcam
 
 # Use RealSense camera (if available)
-python run_juggling_tracker.py
+python apps/juggling_tracker/run_juggling_tracker.py
 
 # Use with IMU streaming from watches
-python run_juggling_tracker.py --webcam --watch-ips 192.168.1.101 192.168.1.102
+python apps/juggling_tracker/run_juggling_tracker.py --webcam --watch-ips 192.168.1.101 192.168.1.102
 ```
 
 **Advanced Modes:**
 ```bash
 # JugVid2cpp high-performance mode
-python run_juggling_tracker.py --jugvid2cpp
+python apps/juggling_tracker/run_juggling_tracker.py --jugvid2cpp
 
 # Video playback mode
-python run_juggling_tracker.py --simulation --video-path video.mp4
+python apps/juggling_tracker/run_juggling_tracker.py --simulation --video-path video.mp4
 
 # IMU streaming with JugVid2cpp
-python run_juggling_tracker.py --jugvid2cpp --watch-ips 10.200.169.205
+python apps/juggling_tracker/run_juggling_tracker.py --jugvid2cpp --watch-ips 10.200.169.205
 ```
 
-**Direct Module Usage (alternative):**
+#### Face Balance Timer
+**Using Launcher (Recommended):**
 ```bash
-python -m juggling_tracker.main --webcam --watch-ips 192.168.1.101
+python launcher.py face
 ```
 
-### Face Balance Timer
-Run the face balance timer using:
+**Direct Usage:**
 ```bash
-python3 run_face_balance_timer.py
+python apps/face_balance_timer/run_face_balance_timer.py
 ```
 
-### Stillness Recorder
-Run the stillness recorder using:
+#### Stillness Recorder
+**Using Launcher (Recommended):**
 ```bash
-# Quick start with default settings
-python3 run_stillness_recorder.py
+python launcher.py stillness   # Interactive menu for variants
+```
+
+**Direct Usage:**
+```bash
+# Basic recorder
+python apps/stillness_recorder/run_stillness_recorder.py
+
+# Headless mode
+python apps/stillness_recorder/run_stillness_recorder_headless.py
+
+# With IMU integration
+python apps/stillness_recorder/run_stillness_recorder_with_imu.py
 
 # With preset configurations
-python3 run_stillness_recorder.py --preset quick
-python3 run_stillness_recorder.py --preset normal
-python3 run_stillness_recorder.py --preset sensitive
-
-# With custom parameters
-python3 stillness_recorder.py --record-duration 10 --motion-threshold 1000 --stillness-duration 3
+python apps/stillness_recorder/run_stillness_recorder.py --preset quick
+python apps/stillness_recorder/run_stillness_recorder.py --preset normal
+python apps/stillness_recorder/run_stillness_recorder.py --preset sensitive
 ```
 
-### Testing
-Run component tests to verify everything is working:
+### 🛠️ Development Tools
+
+#### Setup & Installation
 ```bash
-python3 test_stillness_recorder.py
+python launcher.py setup       # Interactive menu
+python tools/setup/setup_dependencies.py  # Direct usage
+```
+
+#### Testing
+```bash
+python launcher.py test        # Interactive menu
+python tools/testing/test_stillness_recorder.py  # Direct usage
+```
+
+#### Debug Tools
+```bash
+python launcher.py debug       # Interactive menu
+python tools/debug/debug_imu_performance.py  # Direct usage
 ```
 
 ### Command-Line Arguments:

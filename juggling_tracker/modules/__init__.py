@@ -1,1 +1,0 @@
-from .jugvid2cpp_interface import JugVid2cppInterface
