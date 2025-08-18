@@ -161,7 +161,7 @@ class JugglingTracker:
     This class ties all the modules together and provides the main entry point for the application.
     """
     
-    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, use_jugvid2cpp=False, camera_index=0, video_path=None, simulation_speed=2.0, watch_ips=None, depth_only=False): # simulation_speed is legacy
+    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, use_jugvid2cpp=False, camera_index=0, video_path=None, simulation_speed=2.0, watch_ips=None, depth_only=False, debug_mode=False, debug_performance=False, debug_camera=False, debug_imu=False, force_camera_restart=False): # simulation_speed is legacy
         """
         Initialize the JugglingTracker application.
         
@@ -176,10 +176,29 @@ class JugglingTracker:
             simulation_speed (float): Legacy, no longer used directly for FrameAcquisition speed.
             watch_ips (list, optional): List of TicWatch IP addresses for IMU streaming.
             depth_only (bool): If True, use RealSense in depth-only mode for cable compatibility.
+            debug_mode (bool): Enable comprehensive debug mode with detailed console output.
+            debug_performance (bool): Enable performance debugging (frame timing, FPS analysis).
+            debug_camera (bool): Enable camera debugging (initialization, frame acquisition).
+            debug_imu (bool): Enable IMU debugging (connection, data flow).
+            force_camera_restart (bool): Force camera restart on initialization to fix connection issues.
         """
         # Set up configuration directory
         self.config_dir = config_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config')
         os.makedirs(self.config_dir, exist_ok=True)
+        
+        # Debug mode settings
+        self.debug_mode = debug_mode
+        self.debug_performance = debug_performance or debug_mode
+        self.debug_camera = debug_camera or debug_mode
+        self.debug_imu = debug_imu or debug_mode
+        self.force_camera_restart = force_camera_restart
+        
+        if self.debug_mode:
+            print("🐛 DEBUG MODE ENABLED")
+            print(f"   Performance debugging: {self.debug_performance}")
+            print(f"   Camera debugging: {self.debug_camera}")
+            print(f"   IMU debugging: {self.debug_imu}")
+            print(f"   Force camera restart: {self.force_camera_restart}")
         
         # Initialize frame acquisition based on mode
         # Store initial preferences from args for later use when switching modes
@@ -325,6 +344,69 @@ class JugglingTracker:
         # Load default extensions (but don't enable them)
         self.load_default_extensions()
     
+    def _initialize_camera_with_restart(self):
+        """
+        Initialize camera with automatic restart logic for RealSense failures.
+        
+        Returns:
+            bool: True if initialization was successful, False otherwise
+        """
+        max_restart_attempts = 3
+        restart_delay = 2  # seconds
+        
+        # First attempt - normal initialization
+        init_success = self.frame_acquisition.initialize()
+        
+        # If successful or not a RealSense camera, return immediately
+        if init_success or not self._is_realsense_camera():
+            return init_success
+        
+        # RealSense initialization failed - attempt automatic restart
+        if self.debug_camera:
+            print("🎥 [DEBUG] RealSense initialization failed, attempting automatic restart...")
+        
+        for attempt in range(1, max_restart_attempts + 1):
+            if self.debug_camera:
+                print(f"🎥 [DEBUG] Automatic restart attempt {attempt}/{max_restart_attempts}")
+            
+            # Stop the camera and wait
+            try:
+                if hasattr(self.frame_acquisition, 'stop'):
+                    self.frame_acquisition.stop()
+                    if self.debug_camera:
+                        print(f"🎥 [DEBUG] Camera stopped, waiting {restart_delay} seconds...")
+                    time.sleep(restart_delay)
+            except Exception as e:
+                if self.debug_camera:
+                    print(f"🎥 [DEBUG] Camera stop failed during restart attempt {attempt}: {e}")
+            
+            # Try to initialize again
+            init_success = self.frame_acquisition.initialize()
+            if self.debug_camera:
+                print(f"🎥 [DEBUG] Restart attempt {attempt} result: {init_success}")
+            
+            if init_success:
+                print(f"✅ RealSense camera successfully restarted on attempt {attempt}")
+                return True
+            
+            # Increase delay for next attempt to give camera more time
+            restart_delay += 1
+        
+        # All restart attempts failed
+        print(f"❌ RealSense camera failed to initialize after {max_restart_attempts} restart attempts")
+        return False
+    
+    def _is_realsense_camera(self):
+        """
+        Check if the current frame acquisition is a RealSense camera.
+        
+        Returns:
+            bool: True if it's a RealSense camera (FrameAcquisition in live mode)
+        """
+        return (isinstance(self.frame_acquisition, FrameAcquisition) and
+                hasattr(self.frame_acquisition, 'mode') and
+                self.frame_acquisition.mode == 'live')
+    
     def load_stylesheet(self):
         """
         Load the QSS stylesheet.
@@ -356,8 +438,28 @@ class JugglingTracker:
         Returns:
             bool: True if initialization was successful, False otherwise
         """
-        # Initialize the camera
-        if not self.frame_acquisition.initialize():
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] Initializing camera system...")
+            print(f"🎥 [DEBUG] Frame acquisition type: {type(self.frame_acquisition).__name__}")
+            print(f"🎥 [DEBUG] Force camera restart: {self.force_camera_restart}")
+        
+        # Force camera restart if requested (helps with RealSense connection issues)
+        if self.force_camera_restart and hasattr(self.frame_acquisition, 'stop'):
+            if self.debug_camera:
+                print("🎥 [DEBUG] Force restarting camera...")
+            try:
+                self.frame_acquisition.stop()
+                time.sleep(2)  # Wait for camera to fully disconnect
+            except Exception as e:
+                if self.debug_camera:
+                    print(f"🎥 [DEBUG] Camera stop failed (expected): {e}")
+        
+        # Initialize the camera with automatic restart logic for RealSense
+        init_success = self._initialize_camera_with_restart()
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] Camera initialization result: {init_success}")
+        
+        if not init_success:
             print("Failed to initialize primary camera/video mode.")
             original_intended_mode = self.frame_acquisition.mode
 
@@ -501,38 +603,60 @@ class JugglingTracker:
         """
         Process a single frame.
         """
+        frame_start_time = time.time() if self.debug_performance else None
+        
         # Skip processing if paused
         if self.paused or not self.running:
             return
         
         # Get frames from the camera
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] Getting frames from {type(self.frame_acquisition).__name__}")
+        
         depth_frame, color_frame, depth_image, color_image = self.frame_acquisition.get_frames()
         
+        if self.debug_camera:
+            if color_image is not None:
+                print(f"🎥 [DEBUG] Color image: {color_image.shape}, dtype={color_image.dtype}")
+            else:
+                print("🎥 [DEBUG] ❌ Color image is NONE")
+            
+            if depth_image is not None:
+                print(f"🎥 [DEBUG] Depth image: {depth_image.shape}, dtype={depth_image.dtype}")
+            else:
+                print("🎥 [DEBUG] ❌ Depth image is NONE")
+        
         # Get latest IMU data from watches
+        imu_start_time = time.time() if self.debug_performance else None
         if self.watch_imu_manager:
+            if self.debug_imu:
+                print(f"📱 [DEBUG] Getting IMU data from watch manager")
             imu_data_points = self.watch_imu_manager.get_latest_imu_data()
             if imu_data_points:
+                if self.debug_imu:
+                    print(f"📱 [DEBUG] Processing {len(imu_data_points)} IMU data points")
                 # Process and synchronize IMU data with vision data
                 self._process_imu_data(imu_data_points, time.time())
-
-        # ------------ TEMPORARY DEBUG START ------------
-        if color_image is not None:
-            print(f"[Tracker Loop] Color image received: shape={color_image.shape}, dtype={color_image.dtype}")
-        else:
-            print("[Tracker Loop] Color image is NONE")
+            elif self.debug_imu:
+                print(f"📱 [DEBUG] No IMU data received")
         
-        if depth_image is not None:
-            print(f"[Tracker Loop] Depth image received: shape={depth_image.shape}, dtype={depth_image.dtype}")
-        else:
-            print("[Tracker Loop] Depth image is NONE")
-        # ------------ TEMPORARY DEBUG END ------------
+        if self.debug_performance and imu_start_time:
+            imu_time = (time.time() - imu_start_time) * 1000
+            if imu_time > 5:  # Only log if > 5ms
+                print(f"⏱️ [DEBUG] IMU processing took {imu_time:.1f}ms")
 
+        processing_start_time = time.time() if self.debug_performance else None
+        
         # Get current mode from the frame acquisition
         current_mode = self.frame_acquisition.mode if hasattr(self.frame_acquisition, 'mode') else 'unknown'
         
+        if self.debug_performance:
+            print(f"⏱️ [DEBUG] Frame {self.frame_count}: Mode={current_mode}")
+        
         # Special handling for JugVid2cpp mode - it may not have camera frames but should still process
         if current_mode != 'jugvid2cpp' and (depth_image is None or color_image is None):
-            print("Warning: Invalid frames received from frame_acquisition, skipping frame processing.") # Enhanced message
+            if self.debug_camera:
+                print("🎥 [DEBUG] ❌ Invalid frames received, skipping processing")
             return
         
         # For JugVid2cpp mode, create status image if no camera feed
@@ -761,6 +885,14 @@ class JugglingTracker:
         elapsed_time = time.time() - self.start_time
         if elapsed_time > 0:
             self.fps = self.frame_count / elapsed_time
+        
+        # Performance debugging
+        if self.debug_performance and frame_start_time:
+            total_frame_time = (time.time() - frame_start_time) * 1000
+            if total_frame_time > 50:  # Log frames taking > 50ms (causing lag)
+                print(f"⏱️ [DEBUG] ⚠️ SLOW FRAME {self.frame_count}: {total_frame_time:.1f}ms (target: <33ms)")
+            elif self.frame_count % 30 == 0:  # Log every 30th frame for periodic updates
+                print(f"⏱️ [DEBUG] Frame {self.frame_count}: {total_frame_time:.1f}ms, FPS: {self.fps:.1f}")
     
     def _process_imu_data(self, imu_data_points: list, current_time: float):
         """
@@ -1267,6 +1399,11 @@ def parse_args():
     # --simulation-speed is now legacy, but kept for arg parsing compatibility if scripts use it.
     parser.add_argument('--simulation-speed', type=float, default=1.0,
                         help='Legacy. Speed of video playback is determined by video FPS and processing.')
+    parser.add_argument('--debug', action='store_true', help='Enable comprehensive debug mode with detailed console output')
+    parser.add_argument('--debug-performance', action='store_true', help='Enable performance debugging (frame timing, FPS analysis)')
+    parser.add_argument('--debug-camera', action='store_true', help='Enable camera debugging (initialization, frame acquisition)')
+    parser.add_argument('--debug-imu', action='store_true', help='Enable IMU debugging (connection, data flow)')
+    parser.add_argument('--force-camera-restart', action='store_true', help='Force camera restart on initialization to fix connection issues')
     return parser.parse_args()
 
 
@@ -1287,7 +1424,12 @@ def main():
         camera_index=args.camera_index,
         simulation_speed=args.simulation_speed, # Pass along, though its direct effect is diminished
         video_path=args.video_path,
-        watch_ips=args.watch_ips
+        watch_ips=args.watch_ips,
+        debug_mode=args.debug,
+        debug_performance=args.debug_performance,
+        debug_camera=args.debug_camera,
+        debug_imu=args.debug_imu,
+        force_camera_restart=args.force_camera_restart
     )
     app.run()
 

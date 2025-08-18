@@ -598,6 +598,35 @@ pip install numpy opencv-python PyQt6 filterpy websockets requests mediapipe
 - **Detailed Error Messages**: Clear feedback to users about specific connection or import failures
 - **Dependency Safety**: Application no longer crashes due to missing websockets, requests, or other watch dependencies
 
+**Watch GUI Connection Fix (2025-08-18):**
+- **Fixed GUI Input Issue**: Watch connection now properly uses IP addresses entered in the GUI input field
+- **Dynamic Manager Creation**: WatchIMUManager is now created/recreated with GUI-provided IPs instead of only command-line IPs
+- **Improved Connection Logic**: Simplified and more reliable connection process with proper cleanup
+- **Smart IMU System Selection**: Automatically uses high-performance IMU system when available, falls back to legacy system
+- **Enhanced Error Handling**: Better error messages and recovery for connection failures
+- **GUI State Synchronization**: Connect/disconnect buttons properly reflect connection state
+- **Real-time Status Updates**: Connection status and watch details update correctly in the GUI
+
+**Comprehensive Debug System & Issue Resolution (2025-08-18):**
+- **Complete Debug Infrastructure**: Added comprehensive debug mode with separate flags for performance, camera, and IMU debugging
+- **Performance Monitoring**: Frame timing analysis with automatic detection of slow frames (>50ms) and periodic performance reporting
+- **Camera Restart Functionality**: Force camera restart mechanism to resolve RealSense initialization issues requiring unplug/replug
+- **Debug Console Prints**: Extensive debug output throughout the application for troubleshooting lag, camera, and connection issues
+- **System Diagnostic Tool**: Created `debug_juggling_tracker.py` - comprehensive diagnostic script that checks system performance, camera connections, IMU dependencies, and suggests optimizations
+- **Automated Issue Detection**: Script automatically identifies potential lag sources, camera problems, and network connectivity issues
+- **Performance Testing**: Built-in performance tests for frame processing operations to identify bottlenecks
+- **Optimization Suggestions**: Detailed recommendations for resolving lag, camera, and IMU connection problems
+
+**Automatic Camera Restart System (2025-08-18):**
+- **Automatic RealSense Recovery**: Camera restart is now automatic by default when RealSense initialization fails - no more manual flags required!
+- **Smart Restart Logic**: Automatically attempts up to 3 restart attempts with progressive delays (2s, 3s, 4s) when RealSense fails to initialize
+- **Infinite Loop Prevention**: Robust logic prevents endless restart attempts with maximum retry limits and increasing delays
+- **Preserved Force Restart**: The `--force-camera-restart` flag is still available for forcing restart even when camera appears to work
+- **Comprehensive Debug Logging**: Detailed logging of all restart attempts with timestamps and success/failure status
+- **Zero User Intervention**: Users can now simply run `python apps/juggling_tracker/main.py` and camera issues are resolved automatically
+- **Fallback Compatibility**: Automatic restart only applies to RealSense cameras; other modes (webcam, video) are unaffected
+- **Performance Optimized**: Restart attempts use efficient stop/wait/reinitialize cycle without blocking the UI
+
 ## Usage
 
 ### 🚀 New Unified Launcher (Recommended)
