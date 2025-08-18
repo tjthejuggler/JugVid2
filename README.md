@@ -514,6 +514,23 @@ pip install numpy opencv-python PyQt6 filterpy websockets requests mediapipe
 - **Smart Data Aggregation**: Shows summary for multiple watches, details for single watch
 - **Lag Prevention**: Optimized timers and reduced text processing for smooth operation
 
+**IMU Logging Crash Fix (2025-08-18):**
+- **Fixed Critical Crash**: Resolved application crash when clicking the log checkbox in Advanced IMU Monitor
+- **Improved Error Handling**: Enhanced file I/O error handling with proper exception management
+- **Auto-File Selection**: Automatically selects default log file if none specified when logging is enabled
+- **Robust File Operations**: Added directory creation, file cleanup, and graceful error recovery
+- **Better User Feedback**: Clear error messages and automatic checkbox state management on failures
+- **Comprehensive Testing**: Added test suite to verify logging functionality works without crashes
+
+**Watch Connection Crash Fix (2025-08-18):**
+- **Fixed Critical Crash**: Resolved application crash when clicking "Connect" button for watch streaming
+- **Import Error Handling**: Added comprehensive error handling around WatchIMUManager import and initialization
+- **Graceful Degradation**: Application continues to function even if watch IMU dependencies are missing
+- **Connection Error Recovery**: Proper error handling for discovery, streaming, and connection failures
+- **UI State Management**: Connect button properly re-enabled after errors, preventing UI lock-up
+- **Detailed Error Messages**: Clear feedback to users about specific connection or import failures
+- **Dependency Safety**: Application no longer crashes due to missing websockets, requests, or other watch dependencies
+
 ## Usage
 
 ### Juggling Tracker

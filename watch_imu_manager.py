@@ -158,11 +158,40 @@ class IMUStreamHandler:
                 return complete_data
             elif current_data['has_accel']:
                 # For real-time streaming, return accel data immediately
-                # Gyro data will come in separate message
+                # Gyro data will come in separate message, but keep the partial data
+                # so gyro can be matched later
                 temp_data = current_data.copy()
                 del temp_data['has_accel']
                 del temp_data['has_gyro']
                 return temp_data
+            elif current_data['has_gyro']:
+                # If we only have gyro data, try to find recent accel data to pair with
+                # Look for accel data within 50ms (50,000,000 ns)
+                target_timestamp = timestamp_ns
+                best_match_key = None
+                best_time_diff = float('inf')
+                
+                for key, data in partial_data.items():
+                    if data.get('has_accel') and not data.get('has_gyro'):
+                        # Extract timestamp from key
+                        key_timestamp = int(key.split('_')[-1])
+                        time_diff = abs(target_timestamp - key_timestamp)
+                        if time_diff < 50_000_000 and time_diff < best_time_diff:  # Within 50ms
+                            best_match_key = key
+                            best_time_diff = time_diff
+                
+                if best_match_key:
+                    # Combine with the best matching accel data
+                    matched_data = partial_data.pop(best_match_key)
+                    matched_data['gyro_x'] = x
+                    matched_data['gyro_y'] = y
+                    matched_data['gyro_z'] = z
+                    matched_data['has_gyro'] = True
+                    
+                    # Clean up helper flags and return combined data
+                    del matched_data['has_accel']
+                    del matched_data['has_gyro']
+                    return matched_data
             
             # Clean up old partial data (older than 1 second)
             current_time = time.time()

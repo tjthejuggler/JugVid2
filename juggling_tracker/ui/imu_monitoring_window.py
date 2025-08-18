@@ -268,11 +268,24 @@ class IMUMonitoringWindow(QMainWindow):
     
     def toggle_logging(self, enabled):
         """Toggle data logging on/off."""
-        self.logging_enabled = enabled
-        
-        if enabled and self.log_file_path:
-            self.start_logging()
-        elif not enabled:
+        if enabled:
+            # Check if log file path is set
+            if not self.log_file_path:
+                # Automatically select a default log file
+                default_filename = f"imu_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                self.log_file_path = os.path.join(os.getcwd(), default_filename)
+                self.log_file_label.setText(f"Log: {os.path.basename(self.log_file_path)}")
+                print(f"Auto-selected log file: {self.log_file_path}")
+            
+            # Try to start logging
+            if not self.start_logging():
+                # If logging failed, uncheck the checkbox
+                self.logging_checkbox.setChecked(False)
+                return
+            
+            self.logging_enabled = True
+        else:
+            self.logging_enabled = False
             self.stop_logging()
     
     def select_log_file(self):
@@ -290,11 +303,27 @@ class IMUMonitoringWindow(QMainWindow):
                 self.start_logging()
     
     def start_logging(self):
-        """Start logging IMU data to file."""
+        """Start logging IMU data to file.
+        
+        Returns:
+            bool: True if logging started successfully, False otherwise
+        """
         if not self.log_file_path:
-            return
+            print("Error: No log file path specified")
+            return False
         
         try:
+            # Ensure the directory exists
+            log_dir = os.path.dirname(self.log_file_path)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            
+            # Close any existing log file first
+            if self.log_file:
+                self.log_file.close()
+                self.log_file = None
+                self.log_writer = None
+            
             self.log_file = open(self.log_file_path, 'w', newline='')
             self.log_writer = csv.writer(self.log_file)
             
@@ -308,23 +337,39 @@ class IMUMonitoringWindow(QMainWindow):
             self.log_file.flush()
             
             print(f"Started logging IMU data to: {self.log_file_path}")
+            return True
             
         except Exception as e:
             print(f"Error starting IMU logging: {e}")
-            self.logging_enabled = False
-            self.logging_checkbox.setChecked(False)
+            import traceback
+            traceback.print_exc()
+            
+            # Clean up on error
+            if self.log_file:
+                try:
+                    self.log_file.close()
+                except:
+                    pass
+                self.log_file = None
+                self.log_writer = None
+            
+            return False
     
     def stop_logging(self):
         """Stop logging IMU data."""
-        if self.log_file:
-            self.log_file.close()
+        try:
+            if self.log_file:
+                self.log_file.close()
+                print(f"Stopped logging IMU data")
+        except Exception as e:
+            print(f"Error closing log file: {e}")
+        finally:
             self.log_file = None
             self.log_writer = None
-            print(f"Stopped logging IMU data")
     
     def log_imu_data(self, watch_name, data):
         """Log a single IMU data point."""
-        if not self.logging_enabled or not self.log_writer:
+        if not self.logging_enabled or not self.log_writer or not self.log_file:
             return
         
         try:
@@ -348,6 +393,10 @@ class IMUMonitoringWindow(QMainWindow):
             
         except Exception as e:
             print(f"Error logging IMU data: {e}")
+            # Disable logging on error to prevent further crashes
+            self.logging_enabled = False
+            self.logging_checkbox.setChecked(False)
+            self.stop_logging()
     
     def update_imu_display(self):
         """Update the IMU display with latest data."""

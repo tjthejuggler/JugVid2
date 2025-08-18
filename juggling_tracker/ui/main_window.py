@@ -1868,31 +1868,66 @@ class MainWindow(QMainWindow):
         try:
             # Initialize Watch IMU Manager if it doesn't exist
             if not hasattr(self.app, 'watch_imu_manager') or self.app.watch_imu_manager is None:
-                from watch_imu_manager import WatchIMUManager
-                self.app.watch_imu_manager = WatchIMUManager(watch_ips=ip_list)
-                print(f"Watch IMU Manager initialized for IPs: {ip_list}")
+                try:
+                    from watch_imu_manager import WatchIMUManager
+                    self.app.watch_imu_manager = WatchIMUManager(watch_ips=ip_list)
+                    print(f"Watch IMU Manager initialized for IPs: {ip_list}")
+                except ImportError as import_error:
+                    print(f"Failed to import WatchIMUManager: {import_error}")
+                    self.status_bar.showMessage(f"Import error: {import_error}", 5000)
+                    self.connect_watches_btn.setEnabled(True)
+                    return
+                except Exception as init_error:
+                    print(f"Failed to initialize WatchIMUManager: {init_error}")
+                    import traceback
+                    traceback.print_exc()
+                    self.status_bar.showMessage(f"Initialization failed: {init_error}", 5000)
+                    self.connect_watches_btn.setEnabled(True)
+                    return
             else:
                 # Update the watch IPs in the existing manager
-                self.app.watch_imu_manager.watch_ips = ip_list
-                if hasattr(self.app.watch_imu_manager, 'controller') and self.app.watch_imu_manager.controller:
-                    self.app.watch_imu_manager.controller.watch_ips = ip_list
+                try:
+                    self.app.watch_imu_manager.watch_ips = ip_list
+                    if hasattr(self.app.watch_imu_manager, 'controller') and self.app.watch_imu_manager.controller:
+                        self.app.watch_imu_manager.controller.watch_ips = ip_list
+                except Exception as update_error:
+                    print(f"Failed to update watch IPs: {update_error}")
+                    self.status_bar.showMessage(f"Update failed: {update_error}", 5000)
+                    self.connect_watches_btn.setEnabled(True)
+                    return
             
             # Discover and connect
-            discovered = self.app.watch_imu_manager.discover_watches()
+            try:
+                discovered = self.app.watch_imu_manager.discover_watches()
+            except Exception as discovery_error:
+                print(f"Watch discovery failed: {discovery_error}")
+                import traceback
+                traceback.print_exc()
+                self.status_bar.showMessage(f"Discovery failed: {discovery_error}", 5000)
+                self.connect_watches_btn.setEnabled(True)
+                return
             
             if discovered:
-                # Start streaming
-                self.app.watch_imu_manager.start_streaming()
-                if hasattr(self.app.watch_imu_manager, 'start_monitoring'):
-                    self.app.watch_imu_manager.start_monitoring()
-                
-                self.imu_status_label.setText("Status: Connected")
-                self.imu_status_label.setStyleSheet("color: green; font-weight: bold;")
-                self.connect_watches_btn.setEnabled(False)
-                self.disconnect_watches_btn.setEnabled(True)
-                self.open_imu_monitor_btn.setEnabled(True)  # Enable advanced monitor
-                self.status_bar.showMessage(f"Connected to {len(discovered)} watches", 3000)
-                print(f"🚀 Watch IMU streaming started for {len(discovered)} watches")
+                try:
+                    # Start streaming
+                    self.app.watch_imu_manager.start_streaming()
+                    if hasattr(self.app.watch_imu_manager, 'start_monitoring'):
+                        self.app.watch_imu_manager.start_monitoring()
+                    
+                    self.imu_status_label.setText("Status: Connected")
+                    self.imu_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.connect_watches_btn.setEnabled(False)
+                    self.disconnect_watches_btn.setEnabled(True)
+                    self.open_imu_monitor_btn.setEnabled(True)  # Enable advanced monitor
+                    self.status_bar.showMessage(f"Connected to {len(discovered)} watches", 3000)
+                    print(f"🚀 Watch IMU streaming started for {len(discovered)} watches")
+                except Exception as streaming_error:
+                    print(f"Failed to start streaming: {streaming_error}")
+                    import traceback
+                    traceback.print_exc()
+                    self.status_bar.showMessage(f"Streaming failed: {streaming_error}", 5000)
+                    self.connect_watches_btn.setEnabled(True)
+                    return
             else:
                 self.status_bar.showMessage("Failed to connect to any watches", 5000)
                 self.connect_watches_btn.setEnabled(True)
