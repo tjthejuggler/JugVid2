@@ -238,7 +238,7 @@ class JugglingTracker:
                 print("Error: Video playback mode selected but no --video-path provided.")
                 print("Falling back to RealSense (if available) or exiting.")
                 # Fallback logic will be handled in self.initialize()
-                self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
+                self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
                 self.use_simulation = False # Revert flag as playback init will fail
         elif self.use_webcam:
             print("Using webcam mode as specified.")
@@ -252,14 +252,14 @@ class JugglingTracker:
                 print("Using RealSense mode in depth-only mode for cable compatibility.")
             else:
                 print("Using RealSense mode as specified.")
-            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
+            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
         else:
             # Default to RealSense if no other mode is explicitly chosen by args
             if self.depth_only:
                 print("Defaulting to RealSense mode in depth-only mode for cable compatibility.")
             else:
                 print("Defaulting to RealSense mode.")
-            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
+            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
         
         # Initialize other modules
         self.depth_processor = DepthProcessor()
@@ -328,6 +328,11 @@ class JugglingTracker:
         self.fps = 0
         self.is_currently_recording = False # New state for recording
         
+        # Performance optimization state
+        self._first_frame_processed = False
+        self._frame_processing_cache = {}
+        self._memory_pool = {}  # Reusable memory allocations
+        
         # Set up frame processing timer with faster rate for simulation mode
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self.process_frame)
@@ -347,6 +352,7 @@ class JugglingTracker:
     def _initialize_camera_with_restart(self):
         """
         Initialize camera with automatic restart logic for RealSense failures.
+        Enhanced with resource conflict detection and resolution.
         
         Returns:
             bool: True if initialization was successful, False otherwise
@@ -354,20 +360,24 @@ class JugglingTracker:
         max_restart_attempts = 3
         restart_delay = 2  # seconds
         
+        if self.debug_camera:
+            print("🎥 [DEBUG] Starting camera initialization with enhanced restart logic")
+        
         # First attempt - normal initialization
         init_success = self.frame_acquisition.initialize()
         
         # If successful or not a RealSense camera, return immediately
         if init_success or not self._is_realsense_camera():
+            if init_success and self.debug_camera:
+                print("🎥 [DEBUG] Camera initialization successful on first attempt")
             return init_success
         
-        # RealSense initialization failed - attempt automatic restart
-        if self.debug_camera:
-            print("🎥 [DEBUG] RealSense initialization failed, attempting automatic restart...")
+        # RealSense initialization failed - attempt automatic restart with resource management
+        print("🎥 RealSense initialization failed, attempting automatic restart with resource conflict resolution...")
         
         for attempt in range(1, max_restart_attempts + 1):
             if self.debug_camera:
-                print(f"🎥 [DEBUG] Automatic restart attempt {attempt}/{max_restart_attempts}")
+                print(f"🎥 [DEBUG] Enhanced restart attempt {attempt}/{max_restart_attempts}")
             
             # Stop the camera and wait
             try:
@@ -380,10 +390,24 @@ class JugglingTracker:
                 if self.debug_camera:
                     print(f"🎥 [DEBUG] Camera stop failed during restart attempt {attempt}: {e}")
             
+            # On the second attempt, try force resource cleanup
+            if attempt == 2:
+                print("🔄 Attempting force resource cleanup...")
+                try:
+                    # Import here to avoid circular imports
+                    from core.camera.camera_resource_manager import cleanup_camera_resources
+                    if cleanup_camera_resources(force=True):
+                        print("✅ Force resource cleanup completed")
+                        time.sleep(3)  # Give extra time after force cleanup
+                    else:
+                        print("⚠️ Force resource cleanup had issues")
+                except Exception as e:
+                    print(f"⚠️ Error during force resource cleanup: {e}")
+            
             # Try to initialize again
             init_success = self.frame_acquisition.initialize()
             if self.debug_camera:
-                print(f"🎥 [DEBUG] Restart attempt {attempt} result: {init_success}")
+                print(f"🎥 [DEBUG] Enhanced restart attempt {attempt} result: {init_success}")
             
             if init_success:
                 print(f"✅ RealSense camera successfully restarted on attempt {attempt}")
@@ -392,8 +416,14 @@ class JugglingTracker:
             # Increase delay for next attempt to give camera more time
             restart_delay += 1
         
-        # All restart attempts failed
+        # All restart attempts failed - provide helpful error message
         print(f"❌ RealSense camera failed to initialize after {max_restart_attempts} restart attempts")
+        print("💡 Troubleshooting suggestions:")
+        print("   1. Check if another application is using the camera")
+        print("   2. Try unplugging and reconnecting the RealSense camera")
+        print("   3. Run: python -m core.camera.camera_resource_manager --cleanup --force")
+        print("   4. Restart the application with --force-camera-restart flag")
+        
         return False
     
     def _is_realsense_camera(self):
@@ -472,7 +502,7 @@ class JugglingTracker:
                 
                 if self.use_realsense:
                     print("Falling back to RealSense mode.")
-                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only)
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
                     if not self.frame_acquisition.initialize():
                         print("RealSense fallback failed. Trying Webcam.")
                         self.use_realsense = False; self.use_webcam = True
@@ -501,7 +531,7 @@ class JugglingTracker:
                 
                 if self.use_realsense:
                     print("Falling back to RealSense mode.")
-                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only)
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
                     if not self.frame_acquisition.initialize():
                         print("RealSense fallback failed. Trying Webcam.")
                         self.use_realsense = False; self.use_webcam = True
@@ -570,7 +600,7 @@ class JugglingTracker:
     
     def run(self):
         """
-        Run the main application loop.
+        Run the main application loop with optimized initialization.
         """
         if not self.initialize():
             return
@@ -584,6 +614,10 @@ class JugglingTracker:
             # Synchronize UI to the actual app state after initialization
             if hasattr(self.main_window, 'sync_ui_to_app_state'):
                 self.main_window.sync_ui_to_app_state()
+            
+            # Pre-warm the first frame processing to reduce initial lag
+            print("Pre-warming frame processing...")
+            self._prewarm_frame_processing()
             
             # Start the frame processing timer with the appropriate interval
             self.frame_timer.start(self.frame_timer_interval)
@@ -599,9 +633,34 @@ class JugglingTracker:
         finally:
             self.cleanup()
     
+    def _prewarm_frame_processing(self):
+        """
+        Pre-warm frame processing to reduce first frame lag.
+        """
+        try:
+            # Get initial frames to warm up the pipeline
+            depth_frame, color_frame, depth_image, color_image = self.frame_acquisition.get_frames()
+            
+            if color_image is not None:
+                # Pre-allocate common memory pools
+                h, w = color_image.shape[:2]
+                self._memory_pool['color_copy'] = np.zeros_like(color_image)
+                self._memory_pool['composite_buffer'] = np.zeros((h, w*2, 3), dtype=np.uint8)  # For dual view
+                
+                # Warm up the composite view creation
+                if hasattr(self.main_window, 'create_composite_view'):
+                    _ = self.main_window.create_composite_view(color_image, depth_image)
+                
+                print("Frame processing pre-warmed successfully")
+            else:
+                print("Warning: Could not pre-warm frame processing - no initial frames available")
+                
+        except Exception as e:
+            print(f"Warning: Frame processing pre-warm failed: {e}")
+    
     def process_frame(self):
         """
-        Process a single frame.
+        Process a single frame with performance optimizations.
         """
         frame_start_time = time.time() if self.debug_performance else None
         
@@ -609,13 +668,37 @@ class JugglingTracker:
         if self.paused or not self.running:
             return
         
-        # Get frames from the camera
-        if self.debug_camera:
-            print(f"🎥 [DEBUG] Getting frames from {type(self.frame_acquisition).__name__}")
+        # Intelligent frame skipping during high load
+        if not hasattr(self, '_frame_skip_counter'):
+            self._frame_skip_counter = 0
+            self._last_frame_time = 0
+            self._consecutive_slow_frames = 0
+            self._target_frame_time = 0.033  # 30 FPS target (33ms)
         
+        # Check if we should skip this frame due to high load
+        current_time = time.time()
+        if self._last_frame_time > 0:
+            last_frame_duration = current_time - self._last_frame_time
+            if last_frame_duration > self._target_frame_time * 1.5:  # Frame took 50% longer than target
+                self._consecutive_slow_frames += 1
+            else:
+                self._consecutive_slow_frames = max(0, self._consecutive_slow_frames - 1)
+        
+        # Skip frames if we're consistently running slow
+        if self._consecutive_slow_frames > 3:
+            self._frame_skip_counter += 1
+            if self._frame_skip_counter % 2 == 0:  # Skip every other frame during high load
+                self._last_frame_time = current_time
+                return
+        
+        self._last_frame_time = current_time
+        
+        # Get frames from the camera
         depth_frame, color_frame, depth_image, color_image = self.frame_acquisition.get_frames()
         
-        if self.debug_camera:
+        # Reduced debug output - only log camera issues occasionally
+        if self.debug_camera and self.frame_count % 60 == 0:  # Every 60 frames (~2 seconds)
+            print(f"🎥 [DEBUG] Frame {self.frame_count}: Getting frames from {type(self.frame_acquisition).__name__}")
             if color_image is not None:
                 print(f"🎥 [DEBUG] Color image: {color_image.shape}, dtype={color_image.dtype}")
             else:
@@ -629,16 +712,15 @@ class JugglingTracker:
         # Get latest IMU data from watches
         imu_start_time = time.time() if self.debug_performance else None
         if self.watch_imu_manager:
-            if self.debug_imu:
-                print(f"📱 [DEBUG] Getting IMU data from watch manager")
             imu_data_points = self.watch_imu_manager.get_latest_imu_data()
             if imu_data_points:
-                if self.debug_imu:
-                    print(f"📱 [DEBUG] Processing {len(imu_data_points)} IMU data points")
                 # Process and synchronize IMU data with vision data
                 self._process_imu_data(imu_data_points, time.time())
-            elif self.debug_imu:
-                print(f"📱 [DEBUG] No IMU data received")
+                # Reduced IMU debug output
+                if self.debug_imu and self.frame_count % 120 == 0:  # Every 120 frames (~4 seconds)
+                    print(f"📱 [DEBUG] Frame {self.frame_count}: Processing {len(imu_data_points)} IMU data points")
+            elif self.debug_imu and self.frame_count % 300 == 0:  # Every 300 frames (~10 seconds)
+                print(f"📱 [DEBUG] Frame {self.frame_count}: No IMU data received")
         
         if self.debug_performance and imu_start_time:
             imu_time = (time.time() - imu_start_time) * 1000
@@ -650,13 +732,11 @@ class JugglingTracker:
         # Get current mode from the frame acquisition
         current_mode = self.frame_acquisition.mode if hasattr(self.frame_acquisition, 'mode') else 'unknown'
         
-        if self.debug_performance:
-            print(f"⏱️ [DEBUG] Frame {self.frame_count}: Mode={current_mode}")
-        
         # Special handling for JugVid2cpp mode - it may not have camera frames but should still process
         if current_mode != 'jugvid2cpp' and (depth_image is None or color_image is None):
-            if self.debug_camera:
-                print("🎥 [DEBUG] ❌ Invalid frames received, skipping processing")
+            # Only log frame issues occasionally to reduce spam
+            if self.debug_camera and self.frame_count % 30 == 0:
+                print(f"🎥 [DEBUG] Frame {self.frame_count}: ❌ Invalid frames received, skipping processing")
             return
         
         # For JugVid2cpp mode, create status image if no camera feed
@@ -886,13 +966,20 @@ class JugglingTracker:
         if elapsed_time > 0:
             self.fps = self.frame_count / elapsed_time
         
-        # Performance debugging
+        # Performance debugging with reduced output
         if self.debug_performance and frame_start_time:
             total_frame_time = (time.time() - frame_start_time) * 1000
+            
+            # Always log slow frames that cause lag
             if total_frame_time > 50:  # Log frames taking > 50ms (causing lag)
                 print(f"⏱️ [DEBUG] ⚠️ SLOW FRAME {self.frame_count}: {total_frame_time:.1f}ms (target: <33ms)")
-            elif self.frame_count % 30 == 0:  # Log every 30th frame for periodic updates
-                print(f"⏱️ [DEBUG] Frame {self.frame_count}: {total_frame_time:.1f}ms, FPS: {self.fps:.1f}")
+            # Log first frame performance
+            elif self.frame_count == 1:
+                print(f"⏱️ [DEBUG] FIRST FRAME: {total_frame_time:.1f}ms")
+            # Periodic performance updates (less frequent)
+            elif self.frame_count % 150 == 0:  # Every 150 frames (~5 seconds)
+                avg_fps = self.fps
+                print(f"⏱️ [DEBUG] Frame {self.frame_count}: {total_frame_time:.1f}ms, Avg FPS: {avg_fps:.1f}")
     
     def _process_imu_data(self, imu_data_points: list, current_time: float):
         """
@@ -952,8 +1039,8 @@ class JugglingTracker:
                     'watch_ip': latest_data.get('watch_ip', 'unknown')
                 }
                 
-                # Print periodic status (every 30 frames to avoid spam)
-                if self.frame_count % 30 == 0:
+                # Print periodic status (reduced frequency to avoid spam)
+                if self.frame_count % 150 == 0:  # Every 150 frames (~5 seconds)
                     print(f"IMU {watch_name}: accel={accel_magnitude:.2f}m/s², gyro={gyro_magnitude:.2f}rad/s, age={data_age*1000:.1f}ms")
     
     def define_new_ball(self, roi_rect_display_coords):
@@ -1144,13 +1231,13 @@ class JugglingTracker:
         elif not fallback and initial_use_realsense:
             print("Switching to RealSense (based on initial preference or direct switch).")
             self.frame_acquisition = FrameAcquisition(
-                width=default_width, height=default_height, mode='live', depth_only=self.depth_only
+                width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera
             )
             current_primary_mode_is_webcam = False
         else: # Default or fallback scenario: Try RealSense first, then Webcam
             print("Attempting RealSense as primary live mode (default or fallback).")
             self.frame_acquisition = FrameAcquisition(
-                width=default_width, height=default_height, mode='live', depth_only=self.depth_only
+                width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera
             )
             current_primary_mode_is_webcam = False # Tentatively
 
@@ -1178,7 +1265,7 @@ class JugglingTracker:
             elif current_primary_mode_is_webcam and (initial_use_realsense or fallback): # If explicit Webcam failed, and RealSense is an option
                  print("[DEBUG Roo] JugglingTracker.switch_to_live_mode: Webcam failed, trying RealSense fallback.") # Roo log
                  print("Webcam failed. Trying RealSense as fallback.")
-                 self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
+                 self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only, debug_camera=self.debug_camera)
                  realsense_fallback_init_success = self.frame_acquisition.initialize() # Roo log
                  print(f"[DEBUG Roo] JugglingTracker.switch_to_live_mode: RealSense fallback initialize() result: {realsense_fallback_init_success}") # Roo log
                  if not realsense_fallback_init_success:
@@ -1233,11 +1320,21 @@ class JugglingTracker:
         if not jugvid2cpp_init_success:
             print("Failed to initialize JugVid2cpp. Reverting to live mode if possible.")
             print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: JugVid2cpp init failed, attempting fallback to live mode.") # Roo log
+            
+            # Get error details for user feedback
+            error_msg = "JugVid2cpp initialization failed"
+            if hasattr(self.frame_acquisition, 'get_status'):
+                status = self.frame_acquisition.get_status()
+                if status.get('error_message'):
+                    error_msg = status['error_message']
+            
             # Attempt to revert to a default live mode
+            self.main_window.feed_mode_combo.blockSignals(True)
             self.main_window.feed_mode_combo.setCurrentIndex(0) # Visually switch back UI
+            self.main_window.feed_mode_combo.blockSignals(False)
             self.switch_to_live_mode(fallback=True) # Internal switch
             if hasattr(self.main_window, 'statusBar'):
-                self.main_window.statusBar().showMessage("Error: Could not start JugVid2cpp. Reverted to live.", 5000)
+                self.main_window.statusBar().showMessage(f"Error: {error_msg}. Reverted to live mode.", 5000)
             return False
         
         self.frame_count = 0
@@ -1246,6 +1343,11 @@ class JugglingTracker:
             self.frame_timer.start(self.frame_timer_interval)
         print("Switched to JugVid2cpp 3D tracking mode.")
         print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: Successfully switched. FA mode: {self.frame_acquisition.mode}, type: {type(self.frame_acquisition)}") # Roo log
+        
+        # Update UI to show JugVid2cpp status panel
+        if hasattr(self.main_window, 'jugvid2cpp_group'):
+            self.main_window.jugvid2cpp_group.setVisible(True)
+        
         return True
 
     @property
@@ -1353,31 +1455,57 @@ class JugglingTracker:
 
     def cleanup(self):
         """
-        Clean up resources.
+        Clean up resources with enhanced camera resource management.
         """
+        if self.debug_camera:
+            print("🎥 [DEBUG] Starting JugglingTracker cleanup...")
+        
         try:
-            # Stop the frame timer
-            self.frame_timer.stop()
+            # Stop the frame timer first
+            if hasattr(self, 'frame_timer') and self.frame_timer:
+                self.frame_timer.stop()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Frame timer stopped")
             
-            # Stop the camera
-            if self.frame_acquisition:
+            # Stop the camera with proper resource cleanup
+            if hasattr(self, 'frame_acquisition') and self.frame_acquisition:
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Stopping camera...")
                 self.frame_acquisition.stop()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Camera stopped")
             
             # Clean up the extension manager
-            if self.extension_manager:
+            if hasattr(self, 'extension_manager') and self.extension_manager:
                 self.extension_manager.cleanup()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Extension manager cleaned up")
 
             # Clean up the watch manager
-            if self.watch_imu_manager:
+            if hasattr(self, 'watch_imu_manager') and self.watch_imu_manager:
                 self.watch_imu_manager.cleanup()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Watch IMU manager cleaned up")
             
             # Close the main window
-            self.main_window.close()
+            if hasattr(self, 'main_window') and self.main_window:
+                self.main_window.close()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Main window closed")
             
             # Exit the Qt application
-            self.qt_app.quit()
+            if hasattr(self, 'qt_app') and self.qt_app:
+                self.qt_app.quit()
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Qt application quit")
+            
+            print("✅ JugglingTracker cleanup completed successfully")
+            
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            print(f"❌ Error during cleanup: {e}")
+            if self.debug_camera:
+                import traceback
+                traceback.print_exc()
 
 
 def parse_args():

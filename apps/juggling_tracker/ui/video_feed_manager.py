@@ -2,11 +2,14 @@
 import time
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, 
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QFrame, QSizePolicy
 )
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QPen, QColor
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+
+# Import the IMU feed widget
+from .imu_feed_widget import IMUFeedWidget
 
 class VideoFeedWidget(QFrame):
     """
@@ -121,19 +124,21 @@ class VideoFeedWidget(QFrame):
 
 class VideoFeedManager(QWidget):
     """
-    Manages multiple video feeds with dynamic layout.
+    Manages multiple video and IMU feeds with dynamic layout.
     
     Layout rules:
-    - 1-3 feeds: Single row
-    - 4-6 feeds: Two rows (max 3 per row)
+    - 1-4 feeds: Single row
+    - 5+ feeds: Two rows (automatically calculated)
     - Automatically pushes other UI elements down
+    - Supports both video feeds (VideoFeedWidget) and IMU feeds (IMUFeedWidget)
     """
     
     feeds_changed = pyqtSignal(int)  # Signal emitted when number of feeds changes
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.feeds = {}  # feed_id -> VideoFeedWidget
+        self.feeds = {}  # feed_id -> VideoFeedWidget or IMUFeedWidget
+        self.feed_types = {}  # feed_id -> 'video' or 'imu'
         self.feed_counter = 0
         self.setup_ui()
         
@@ -154,13 +159,14 @@ class VideoFeedManager(QWidget):
         # Initially hide the container
         self.feeds_container.setVisible(False)
         
-    def add_feed(self, feed_name="Feed", feed_id=None):
+    def add_feed(self, feed_name="Feed", feed_id=None, feed_type="video"):
         """
-        Add a new video feed.
+        Add a new video or IMU feed.
         
         Args:
             feed_name (str): Display name for the feed
             feed_id (str, optional): Unique ID for the feed. If None, auto-generated.
+            feed_type (str): Type of feed - 'video' or 'imu'
             
         Returns:
             str: The feed ID
@@ -173,9 +179,28 @@ class VideoFeedManager(QWidget):
             print(f"Warning: Feed {feed_id} already exists")
             return feed_id
             
-        # Create new feed widget
-        feed_widget = VideoFeedWidget(feed_id, feed_name, self)
+        # Create appropriate feed widget based on type
+        if feed_type == "imu":
+            # Extract watch name from feed_name if possible
+            watch_name = "unknown"
+            if "left" in feed_name.lower():
+                watch_name = "left"
+            elif "right" in feed_name.lower():
+                watch_name = "right"
+            elif "watch" in feed_name.lower():
+                # Try to extract watch identifier
+                parts = feed_name.lower().split()
+                for part in parts:
+                    if "watch" in part:
+                        watch_name = part.replace("watch", "").strip("_-")
+                        break
+            
+            feed_widget = IMUFeedWidget(feed_id, feed_name, watch_name, self)
+        else:
+            feed_widget = VideoFeedWidget(feed_id, feed_name, self)
+        
         self.feeds[feed_id] = feed_widget
+        self.feed_types[feed_id] = feed_type
         
         # Update layout
         self._update_layout()
@@ -185,7 +210,43 @@ class VideoFeedManager(QWidget):
             self.feeds_container.setVisible(True)
             
         self.feeds_changed.emit(len(self.feeds))
-        print(f"Added feed: {feed_id} ({feed_name})")
+        print(f"Added {feed_type} feed: {feed_id} ({feed_name})")
+        return feed_id
+    
+    def add_imu_feed(self, feed_name="IMU Feed", feed_id=None, watch_name="unknown"):
+        """
+        Convenience method to add an IMU feed.
+        
+        Args:
+            feed_name (str): Display name for the feed
+            feed_id (str, optional): Unique ID for the feed. If None, auto-generated.
+            watch_name (str): Name of the watch (left, right, etc.)
+            
+        Returns:
+            str: The feed ID
+        """
+        if feed_id is None:
+            feed_id = f"imu_{watch_name}_{self.feed_counter}"
+            self.feed_counter += 1
+            
+        if feed_id in self.feeds:
+            print(f"Warning: IMU Feed {feed_id} already exists")
+            return feed_id
+            
+        # Create IMU feed widget
+        feed_widget = IMUFeedWidget(feed_id, feed_name, watch_name, self)
+        self.feeds[feed_id] = feed_widget
+        self.feed_types[feed_id] = "imu"
+        
+        # Update layout
+        self._update_layout()
+        
+        # Show container if this is the first feed
+        if len(self.feeds) == 1:
+            self.feeds_container.setVisible(True)
+            
+        self.feeds_changed.emit(len(self.feeds))
+        print(f"Added IMU feed: {feed_id} ({feed_name}) for {watch_name} watch")
         return feed_id
         
     def remove_feed(self, feed_id):
@@ -207,6 +268,7 @@ class VideoFeedManager(QWidget):
         widget.setParent(None)
         widget.deleteLater()
         del self.feeds[feed_id]
+        del self.feed_types[feed_id]
         
         # Update layout
         self._update_layout()
@@ -219,18 +281,37 @@ class VideoFeedManager(QWidget):
         print(f"Removed feed: {feed_id}")
         return True
         
-    def update_feed(self, feed_id, pixmap):
+    def update_feed(self, feed_id, data):
         """
-        Update a specific feed with new frame data.
+        Update a specific feed with new data.
         
         Args:
             feed_id (str): ID of the feed to update
-            pixmap (QPixmap): New frame data
+            data: New data - QPixmap for video feeds, dict for IMU feeds
         """
         if feed_id in self.feeds:
-            self.feeds[feed_id].update_frame(pixmap)
+            feed_type = self.feed_types.get(feed_id, "video")
+            if feed_type == "imu":
+                # Update IMU feed with sensor data
+                self.feeds[feed_id].update_imu_data(data)
+            else:
+                # Update video feed with pixmap
+                self.feeds[feed_id].update_frame(data)
         else:
             print(f"Warning: Attempted to update non-existent feed: {feed_id}")
+    
+    def update_imu_feed(self, feed_id, imu_data):
+        """
+        Convenience method to update an IMU feed with sensor data.
+        
+        Args:
+            feed_id (str): ID of the IMU feed to update
+            imu_data (dict): IMU sensor data
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "imu":
+            self.feeds[feed_id].update_imu_data(imu_data)
+        else:
+            print(f"Warning: Attempted to update non-existent or non-IMU feed: {feed_id}")
             
     def set_feed_name(self, feed_id, name):
         """
@@ -282,14 +363,15 @@ class VideoFeedManager(QWidget):
             return
             
         # Calculate grid dimensions
-        if feed_count <= 3:
-            # Single row
+        if feed_count <= 4:
+            # Single row for 1-4 feeds
             rows = 1
             cols = feed_count
         else:
-            # Two rows, max 3 per row
+            # Two rows for 5+ feeds
             rows = 2
-            cols = 3
+            # Calculate columns needed for the feeds
+            cols = (feed_count + 1) // 2  # Ceiling division to distribute feeds across rows
             
         # Add feeds to grid
         feed_widgets = list(self.feeds.values())
@@ -313,3 +395,70 @@ class VideoFeedManager(QWidget):
         feed_ids = list(self.feeds.keys())
         for feed_id in feed_ids:
             self.remove_feed(feed_id)
+    
+    def get_feed_type(self, feed_id):
+        """
+        Get the type of a feed.
+        
+        Args:
+            feed_id (str): ID of the feed
+            
+        Returns:
+            str: 'video', 'imu', or None if feed doesn't exist
+        """
+        return self.feed_types.get(feed_id)
+    
+    def get_imu_feeds(self):
+        """
+        Get all IMU feed IDs.
+        
+        Returns:
+            list: List of IMU feed IDs
+        """
+        return [feed_id for feed_id, feed_type in self.feed_types.items() if feed_type == "imu"]
+    
+    def get_video_feeds(self):
+        """
+        Get all video feed IDs.
+        
+        Returns:
+            list: List of video feed IDs
+        """
+        return [feed_id for feed_id, feed_type in self.feed_types.items() if feed_type == "video"]
+    
+    def clear_imu_feed_data(self, feed_id):
+        """
+        Clear data from an IMU feed.
+        
+        Args:
+            feed_id (str): ID of the IMU feed to clear
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "imu":
+            self.feeds[feed_id].clear_data()
+        else:
+            print(f"Warning: Attempted to clear non-existent or non-IMU feed: {feed_id}")
+    
+    def set_imu_feed_settings(self, feed_id, history_length=None, auto_scale=None, value_ranges=None):
+        """
+        Configure settings for an IMU feed.
+        
+        Args:
+            feed_id (str): ID of the IMU feed
+            history_length (int, optional): Number of data points to keep
+            auto_scale (bool, optional): Enable/disable auto-scaling
+            value_ranges (tuple, optional): (accel_range, gyro_range) for custom scaling
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "imu":
+            imu_widget = self.feeds[feed_id]
+            
+            if history_length is not None:
+                imu_widget.set_history_length(history_length)
+            
+            if auto_scale is not None:
+                imu_widget.set_auto_scale(auto_scale)
+            
+            if value_ranges is not None:
+                accel_range, gyro_range = value_ranges
+                imu_widget.set_value_ranges(accel_range, gyro_range)
+        else:
+            print(f"Warning: Attempted to configure non-existent or non-IMU feed: {feed_id}")

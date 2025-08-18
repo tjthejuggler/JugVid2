@@ -98,10 +98,14 @@ class MainWindow(QMainWindow):
         # Load window state
         self.load_window_state()
         
-        # Set up timer for UI updates
+        # Set up timer for UI updates with adaptive rate
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(33)  # ~30 FPS
+        self.update_timer.start(50)  # Start at 20 FPS for UI updates (less aggressive)
+        
+        # Performance monitoring for adaptive UI updates
+        self._ui_update_count = 0
+        self._last_ui_performance_check = time.time()
         
         # IMU updates are now handled by the main update_ui timer to prevent lag
         # No separate high-frequency timer needed
@@ -282,10 +286,40 @@ class MainWindow(QMainWindow):
         
         self.watch_imu_group.setLayout(self.watch_imu_layout)
 
+        # Create JugVid2cpp Status GroupBox
+        self.jugvid2cpp_group = QGroupBox("JugVid2cpp 3D Tracking Status")
+        self.jugvid2cpp_layout = QFormLayout()
+        
+        # Connection status display
+        self.jugvid2cpp_status_label = QLabel("Status: Not Active")
+        self.jugvid2cpp_status_label.setStyleSheet("color: gray; font-weight: bold;")
+        self.jugvid2cpp_layout.addRow("Connection:", self.jugvid2cpp_status_label)
+        
+        # Ball tracking status
+        self.jugvid2cpp_balls_label = QLabel("No balls detected")
+        self.jugvid2cpp_balls_label.setWordWrap(True)
+        self.jugvid2cpp_balls_label.setMaximumHeight(60)
+        self.jugvid2cpp_balls_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.jugvid2cpp_balls_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc; font-size: 11px;")
+        self.jugvid2cpp_layout.addRow("Ball Data:", self.jugvid2cpp_balls_label)
+        
+        # Error display
+        self.jugvid2cpp_error_label = QLabel("")
+        self.jugvid2cpp_error_label.setWordWrap(True)
+        self.jugvid2cpp_error_label.setMaximumHeight(40)
+        self.jugvid2cpp_error_label.setStyleSheet("color: red; font-size: 10px;")
+        self.jugvid2cpp_layout.addRow("Errors:", self.jugvid2cpp_error_label)
+        
+        self.jugvid2cpp_group.setLayout(self.jugvid2cpp_layout)
+        
+        # Initially hide JugVid2cpp group (show only when active)
+        self.jugvid2cpp_group.setVisible(False)
+
         # Add all groups to main layout
         self.main_layout.addWidget(self.feed_source_group)
         self.main_layout.addWidget(self.recording_group) # Add recording group
         self.main_layout.addWidget(self.watch_imu_group) # Add Watch IMU group
+        self.main_layout.addWidget(self.jugvid2cpp_group) # Add JugVid2cpp group
         self.main_layout.addWidget(self.ball_controls_container)
         self.main_layout.addWidget(self.simple_tracking_settings_btn)
         self.main_layout.addWidget(self.tracked_balls_scroll)
@@ -443,6 +477,21 @@ class MainWindow(QMainWindow):
         self.demo_feeds_action.triggered.connect(self.demo_feed_configurations)
         self.view_menu.addAction(self.demo_feeds_action)
         
+        self.view_menu.addSeparator()
+        
+        # IMU feed actions
+        self.toggle_imu_feeds_action = QAction("Toggle &IMU Feeds", self)
+        self.toggle_imu_feeds_action.setShortcut(QKeySequence("Ctrl+I"))
+        self.toggle_imu_feeds_action.setCheckable(True)
+        self.toggle_imu_feeds_action.setChecked(True)  # Default enabled
+        self.toggle_imu_feeds_action.triggered.connect(self.toggle_imu_feeds)
+        self.view_menu.addAction(self.toggle_imu_feeds_action)
+        
+        self.clear_imu_feeds_action = QAction("Clear IMU Feed &Data", self)
+        self.clear_imu_feeds_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        self.clear_imu_feeds_action.triggered.connect(self.clear_all_imu_feed_data)
+        self.view_menu.addAction(self.clear_imu_feeds_action)
+        
         # Extensions menu
         self.extensions_menu = self.menu_bar.addMenu("&Extensions")
         
@@ -533,10 +582,27 @@ class MainWindow(QMainWindow):
     def update_ui(self):
         """
         Update the UI with the latest data.
+        Optimized to reduce unnecessary updates.
         """
-        # This method will be called by the timer to update the UI
-        # Update IMU data display if available
-        self.update_imu_data_display()
+        self._ui_update_count += 1
+        
+        # Adaptive UI update rate based on performance
+        current_time = time.time()
+        if current_time - self._last_ui_performance_check > 5.0:  # Check every 5 seconds
+            # If we're running slow, reduce UI update frequency
+            if hasattr(self.app, 'fps') and self.app.fps < 25:
+                self.update_timer.setInterval(66)  # 15 FPS for UI updates
+            elif hasattr(self.app, 'fps') and self.app.fps > 28:
+                self.update_timer.setInterval(50)  # 20 FPS for UI updates
+            self._last_ui_performance_check = current_time
+        
+        # Update IMU data display less frequently to reduce load
+        if self._ui_update_count % 2 == 0:  # Every other UI update
+            self.update_imu_data_display()
+        
+        # Update JugVid2cpp status display even less frequently
+        if self._ui_update_count % 4 == 0:  # Every 4th UI update
+            self.update_jugvid2cpp_status_display()
     
     def on_feeds_changed(self, feed_count):
         """
@@ -570,24 +636,24 @@ class MainWindow(QMainWindow):
                     hand_positions=None, extension_results=None, debug_info=None, tracked_balls_for_display=None, simple_tracking=None):
         """
         Update the video display with a new frame.
-        
-        Args:
-            color_image: Color image in BGR format
-            depth_image: Depth image (optional)
-            masks: Dictionary of mask_name -> mask (optional)
-            identified_balls: Dictionary of ball_name -> blob (optional) - DEPRECATED, use tracked_balls_for_display instead
-            hand_positions: Tuple of ((left_hand_x, left_hand_y), (right_hand_x, right_hand_y)) (optional)
-            extension_results: Dictionary of extension_name -> results (optional)
-            debug_info: Dictionary of debug information (optional)
-            tracked_balls_for_display: List of dictionaries containing tracked ball information (optional)
-            simple_tracking: Dictionary containing simple tracking results (optional)
+        Optimized to reduce unnecessary processing and memory allocations.
         """
         if color_image is None:
-            print("Warning: update_frame called with None color_image")
+            # Reduce warning spam
+            if not hasattr(self, '_none_image_warning_count'):
+                self._none_image_warning_count = 0
+            self._none_image_warning_count += 1
+            if self._none_image_warning_count % 30 == 1:  # Log every 30th occurrence
+                print(f"Warning: update_frame called with None color_image (#{self._none_image_warning_count})")
             return
         
-        # Store the tracked balls data for the panel
-        if tracked_balls_for_display:
+        # Initialize frame update counter for optimization
+        if not hasattr(self, '_frame_update_count'):
+            self._frame_update_count = 0
+        self._frame_update_count += 1
+        
+        # Store the tracked balls data for the panel (less frequent updates)
+        if tracked_balls_for_display and self._frame_update_count % 3 == 0:  # Every 3rd frame
             self.tracked_balls_data = tracked_balls_for_display
             self.update_tracked_balls_panel()
         
@@ -596,7 +662,7 @@ class MainWindow(QMainWindow):
             # Add the main feed
             main_feed_id = self.video_feed_manager.add_feed("Main Feed", "main")
         
-        # Create different feed views
+        # Create different feed views with caching
         feeds_to_update = self._create_feed_views(color_image, depth_image, masks,
                                                  tracked_balls_for_display, simple_tracking,
                                                  hand_positions, debug_info)
@@ -607,19 +673,20 @@ class MainWindow(QMainWindow):
                 if pixmap and not pixmap.isNull():
                     self.video_feed_manager.update_feed(feed_id, pixmap)
         else:
-            # Create a status feed showing camera issues
-            self._create_camera_error_feed()
+            # Create a status feed showing camera issues (less frequently)
+            if self._frame_update_count % 10 == 0:  # Every 10th frame
+                self._create_camera_error_feed()
         
-        # Update status bar
-        if debug_info:
+        # Update status bar less frequently to reduce UI load
+        if debug_info and self._frame_update_count % 5 == 0:  # Every 5th frame
             if 'Num Identified Balls' in debug_info:
                 self.balls_label.setText(f"Balls: {debug_info['Num Identified Balls']}")
             
             if 'Mode' in debug_info:
                 self.mode_label.setText(f"Mode: {debug_info['Mode']}")
         
-        # Update FPS
-        if hasattr(self.app, 'fps'):
+        # Update FPS less frequently
+        if hasattr(self.app, 'fps') and self._frame_update_count % 10 == 0:  # Every 10th frame
             self.fps_label.setText(f"FPS: {self.app.fps:.1f}")
     
     def _create_feed_views(self, color_image, depth_image, masks, tracked_balls_for_display,
@@ -932,163 +999,158 @@ class MainWindow(QMainWindow):
             print(f"Error creating camera error feed: {e}")
     
     def create_composite_view(self, color_image, depth_image=None, masks=None):
+        """
+        Create composite view with performance optimizations.
+        Reduced debug output and optimized processing.
+        """
         if color_image is None:
-            print("[MainWindow] create_composite_view: color_image is None, returning black.")
-            return np.zeros((480, 640, 3), dtype=np.uint8)
+            # Return cached black image to avoid repeated allocation
+            if not hasattr(self, '_cached_black_image'):
+                self._cached_black_image = np.zeros((480, 640, 3), dtype=np.uint8)
+            return self._cached_black_image
+        
+        # Cache view settings to avoid repeated checks
+        if not hasattr(self, '_last_view_settings'):
+            self._last_view_settings = None
+            self._cached_composite = None
+            self._cached_views = {}
+        
+        current_settings = (self.show_color, self.show_depth, self.show_masks, self.show_simple_tracking_mask)
         
         # Determine what views to show
         views_to_show = []
         
-        # Add color view if enabled
+        # Add color view if enabled (avoid unnecessary copy for single view)
         if self.show_color:
-            views_to_show.append(('color', color_image.copy()))
-            print(f"[MainWindow] create_composite_view: Adding color view: {color_image.shape}")
+            if len(current_settings) == 1 and current_settings[0]:  # Only color enabled
+                return color_image  # Direct return for single color view
+            views_to_show.append(('color', color_image))
         
         # Add depth view if enabled and available
         if depth_image is not None and self.show_depth:
-            print(f"[MainWindow] create_composite_view: Processing depth image. Shape: {depth_image.shape}, dtype: {depth_image.dtype}")
             try:
-                # Ensure depth_image is 2D if it's not already (it should be)
-                if len(depth_image.shape) == 3:
-                    depth_image_gray = depth_image[:,:,0] # Or handle as error
-                    print(f"[MainWindow] Warning: Depth image was 3-channel, took first channel. Shape: {depth_image_gray.shape}")
-                else:
-                    depth_image_gray = depth_image
+                # Cache depth processing to avoid repeated computation
+                depth_cache_key = id(depth_image)
+                if not hasattr(self, '_depth_cache') or self._depth_cache.get('key') != depth_cache_key:
+                    # Ensure depth_image is 2D
+                    if len(depth_image.shape) == 3:
+                        depth_image_gray = depth_image[:,:,0]
+                    else:
+                        depth_image_gray = depth_image
 
-                # Normalize depth image for visualization
-                # Check for empty or all-zero depth image to avoid errors with convertScaleAbs
-                if np.any(depth_image_gray): # Only process if there's some data
-                    depth_normalized = cv2.convertScaleAbs(depth_image_gray, alpha=0.03) # Adjust alpha if needed
-                else:
-                    depth_normalized = np.zeros_like(depth_image_gray, dtype=np.uint8) # Black if empty
+                    # Optimize depth normalization
+                    if np.any(depth_image_gray):
+                        depth_normalized = cv2.convertScaleAbs(depth_image_gray, alpha=0.03)
+                    else:
+                        depth_normalized = np.zeros_like(depth_image_gray, dtype=np.uint8)
+                    
+                    depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+                    
+                    # Resize only if necessary
+                    target_height, target_width = color_image.shape[:2]
+                    if depth_colormap.shape[:2] != (target_height, target_width):
+                        depth_colormap_resized = cv2.resize(depth_colormap, (target_width, target_height))
+                    else:
+                        depth_colormap_resized = depth_colormap
+                    
+                    # Cache the result
+                    self._depth_cache = {'key': depth_cache_key, 'result': depth_colormap_resized}
                 
-                print(f"[MainWindow] create_composite_view: Depth normalized. Shape: {depth_normalized.shape}, dtype: {depth_normalized.dtype}")
-
-                depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-                print(f"[MainWindow] create_composite_view: Depth colormap. Shape: {depth_colormap.shape}")
-                
-                # Resize depth colormap to match color image dimensions
-                target_height = color_image.shape[0]
-                target_width = color_image.shape[1]
-                
-                # Ensure depth_colormap is not empty before resizing
-                if depth_colormap.size == 0:
-                    print("[MainWindow] Error: depth_colormap is empty before resize.")
-                    # Fallback: create a black image of target size
-                    depth_colormap_resized = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-                elif depth_colormap.shape[0] != target_height or depth_colormap.shape[1] != target_width:
-                    depth_colormap_resized = cv2.resize(depth_colormap, (target_width, target_height))
-                    print(f"[MainWindow] create_composite_view: Depth colormap resized. Shape: {depth_colormap_resized.shape}")
-                else:
-                    depth_colormap_resized = depth_colormap # No resize needed
-
-                views_to_show.append(('depth', depth_colormap_resized))
-                print(f"[MainWindow] create_composite_view: Adding depth view: {depth_colormap_resized.shape}")
+                views_to_show.append(('depth', self._depth_cache['result']))
                 
             except Exception as e:
-                print(f"[MainWindow] Error creating depth colormap: {e}")
+                # Reduce debug spam - only log errors occasionally
+                if not hasattr(self, '_depth_error_count'):
+                    self._depth_error_count = 0
+                self._depth_error_count += 1
+                if self._depth_error_count % 30 == 1:  # Log every 30th error
+                    print(f"[MainWindow] Depth processing error (#{self._depth_error_count}): {e}")
         
         # Add mask view if enabled and available
         if masks is not None and self.show_masks:
             try:
-                # Show only the combined mask (the most relevant one for simple tracking)
                 combined_mask = masks.get('Combined')
                 if combined_mask is not None:
-                    # Convert mask to BGR for visualization
-                    mask_bgr = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
+                    # Cache mask processing
+                    mask_cache_key = id(combined_mask)
+                    if not hasattr(self, '_mask_cache') or self._mask_cache.get('key') != mask_cache_key:
+                        mask_bgr = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
+                        cv2.putText(mask_bgr, "Proximity Mask", (10, 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        
+                        target_height, target_width = color_image.shape[:2]
+                        if mask_bgr.shape[:2] != (target_height, target_width):
+                            mask_resized = cv2.resize(mask_bgr, (target_width, target_height))
+                        else:
+                            mask_resized = mask_bgr
+                        
+                        self._mask_cache = {'key': mask_cache_key, 'result': mask_resized}
                     
-                    # Add the mask name
-                    cv2.putText(mask_bgr, "Proximity Mask", (10, 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    
-                    # Resize mask to match color image dimensions
-                    target_height = color_image.shape[0]
-                    target_width = color_image.shape[1]
-                    mask_resized = cv2.resize(mask_bgr, (target_width, target_height))
-                    
-                    views_to_show.append(('mask', mask_resized))
-                    print(f"[MainWindow] create_composite_view: Adding mask view: {mask_resized.shape}")
-                else:
-                    print("Warning: Combined mask not found in masks dictionary")
+                    views_to_show.append(('mask', self._mask_cache['result']))
             except Exception as e:
-                print(f"[MainWindow] Error processing masks: {e}")
+                # Reduce debug spam for mask errors
+                if not hasattr(self, '_mask_error_count'):
+                    self._mask_error_count = 0
+                self._mask_error_count += 1
+                if self._mask_error_count % 30 == 1:
+                    print(f"[MainWindow] Mask processing error (#{self._mask_error_count}): {e}")
         
-        # Add simple tracking mask view if enabled and available
-        if self.show_simple_tracking_mask and self.app and hasattr(self.app, 'simple_tracker'):
+        # Simplified simple tracking mask (remove expensive recomputation)
+        if self.show_simple_tracking_mask and masks and 'Combined' in masks:
             try:
-                # Generate the proximity mask independently for simple tracking visualization
-                proximity_mask = None
-                
-                # We need to recreate the proximity mask from the depth data
-                if hasattr(self.app, 'depth_processor') and hasattr(self.app, 'last_depth_image_for_def') and hasattr(self.app, 'frame_acquisition'):
-                    # Get the current depth data
-                    depth_image = getattr(self.app, 'last_depth_image_for_def', None)
-                    depth_scale = self.app.frame_acquisition.get_depth_scale() if hasattr(self.app.frame_acquisition, 'get_depth_scale') else 0.001
-                    
-                    if depth_image is not None:
-                        # Process depth to meters
-                        depth_in_meters = self.app.depth_processor.process_depth_frame(None, depth_image, depth_scale)
+                # Use existing combined mask instead of recomputing
+                proximity_mask = masks['Combined']
+                if proximity_mask is not None and hasattr(self.app, 'simple_tracker'):
+                    tracking_cache_key = id(proximity_mask)
+                    if not hasattr(self, '_tracking_cache') or self._tracking_cache.get('key') != tracking_cache_key:
+                        min_size = getattr(self.app.depth_processor, 'min_object_size', 50) if hasattr(self.app, 'depth_processor') else 50
+                        max_size = getattr(self.app.depth_processor, 'max_object_size', 5000) if hasattr(self.app, 'depth_processor') else 5000
                         
-                        # Create proximity mask
-                        proximity_mask = self.app.depth_processor.create_proximity_mask(depth_in_meters)
-                        proximity_mask = self.app.depth_processor.cleanup_mask(proximity_mask)
+                        tracking_mask = self.app.simple_tracker.get_tracking_visualization_mask(
+                            proximity_mask, min_size, max_size
+                        )
                         
-                        # Apply hand mask removal if available
-                        if hasattr(self.app, 'skeleton_detector') and hasattr(self.app, 'last_color_image_for_def'):
-                            color_image_for_hands = getattr(self.app, 'last_color_image_for_def', None)
-                            if color_image_for_hands is not None:
-                                pose_landmarks = self.app.skeleton_detector.detect_skeleton(color_image_for_hands)
-                                hand_positions = self.app.skeleton_detector.get_hand_positions(pose_landmarks, color_image_for_hands.shape)
-                                hand_mask = self.app.skeleton_detector.create_hand_mask(hand_positions, color_image_for_hands.shape)
-                                proximity_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
-                elif masks and 'Combined' in masks:
-                    # Fallback to using the existing combined mask if available
-                    proximity_mask = masks['Combined']
-                
-                if proximity_mask is not None:
-                    # Get the tracking visualization mask
-                    min_size = getattr(self.app.depth_processor, 'min_object_size', 50) if hasattr(self.app, 'depth_processor') else 50
-                    max_size = getattr(self.app.depth_processor, 'max_object_size', 5000) if hasattr(self.app, 'depth_processor') else 5000
+                        cv2.putText(tracking_mask, "Simple Tracking Mask", (10, 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                        
+                        target_height, target_width = color_image.shape[:2]
+                        if tracking_mask.shape[:2] != (target_height, target_width):
+                            tracking_mask_resized = cv2.resize(tracking_mask, (target_width, target_height))
+                        else:
+                            tracking_mask_resized = tracking_mask
+                        
+                        self._tracking_cache = {'key': tracking_cache_key, 'result': tracking_mask_resized}
                     
-                    tracking_mask = self.app.simple_tracker.get_tracking_visualization_mask(
-                        proximity_mask, min_size, max_size
-                    )
-                    
-                    # Add title to the tracking mask
-                    cv2.putText(tracking_mask, "Simple Tracking Mask", (10, 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                    
-                    # Resize tracking mask to match color image dimensions
-                    target_height = color_image.shape[0]
-                    target_width = color_image.shape[1]
-                    tracking_mask_resized = cv2.resize(tracking_mask, (target_width, target_height))
-                    
-                    views_to_show.append(('simple_tracking_mask', tracking_mask_resized))
-                    print(f"[MainWindow] create_composite_view: Adding simple tracking mask view: {tracking_mask_resized.shape}")
-                else:
-                    print("Warning: No depth data available for simple tracking visualization")
+                    views_to_show.append(('simple_tracking_mask', self._tracking_cache['result']))
             except Exception as e:
-                print(f"[MainWindow] Error creating simple tracking mask: {e}")
+                # Reduce debug spam for tracking errors
+                if not hasattr(self, '_tracking_error_count'):
+                    self._tracking_error_count = 0
+                self._tracking_error_count += 1
+                if self._tracking_error_count % 30 == 1:
+                    print(f"[MainWindow] Tracking mask error (#{self._tracking_error_count}): {e}")
         
         # Create composite based on enabled views
         if not views_to_show:
-            # If no views are enabled, show a black screen with a message
-            composite = np.zeros((color_image.shape[0], color_image.shape[1], 3), dtype=np.uint8)
-            cv2.putText(composite, "No views enabled", (50, composite.shape[0]//2),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-            print("[MainWindow] create_composite_view: No views enabled, showing message")
+            # Cache "no views" message
+            if not hasattr(self, '_cached_no_views_image'):
+                self._cached_no_views_image = np.zeros((color_image.shape[0], color_image.shape[1], 3), dtype=np.uint8)
+                cv2.putText(self._cached_no_views_image, "No views enabled", (50, self._cached_no_views_image.shape[0]//2),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            return self._cached_no_views_image
         elif len(views_to_show) == 1:
-            # Single view - use full size
-            composite = views_to_show[0][1]
-            print(f"[MainWindow] create_composite_view: Single view ({views_to_show[0][0]}): {composite.shape}")
+            # Single view - return directly
+            return views_to_show[0][1]
         else:
-            # Multiple views - arrange side by side
-            composite = np.hstack([view[1] for view in views_to_show])
-            view_names = [view[0] for view in views_to_show]
-            print(f"[MainWindow] create_composite_view: Multiple views ({', '.join(view_names)}): {composite.shape}")
-        
-        print(f"[MainWindow] create_composite_view: Final composite shape for return: {composite.shape}")
-        return composite
+            # Multiple views - optimize horizontal stacking
+            try:
+                # Use efficient numpy concatenation
+                composite = np.concatenate([view[1] for view in views_to_show], axis=1)
+                return composite
+            except Exception as e:
+                print(f"[MainWindow] Error creating composite: {e}")
+                # Fallback to first view
+                return views_to_show[0][1]
     
     def load_window_state(self):
         """
@@ -1813,8 +1875,13 @@ class MainWindow(QMainWindow):
             self.select_video_button.setEnabled(False)
             self.video_path_label.setText("JugVid2cpp provides 3D ball positions directly")
             if self.app and hasattr(self.app, 'switch_to_jugvid2cpp_mode'):
-                self.app.switch_to_jugvid2cpp_mode()
-            self.status_bar.showMessage("Switched to JugVid2cpp 3D Tracking mode.", 3000)
+                success = self.app.switch_to_jugvid2cpp_mode()
+                if success:
+                    self.status_bar.showMessage("Switched to JugVid2cpp 3D Tracking mode.", 3000)
+                else:
+                    self.status_bar.showMessage("Failed to initialize JugVid2cpp. Check that the executable is available.", 5000)
+            else:
+                self.status_bar.showMessage("JugVid2cpp integration not available.", 3000)
         self.update_recording_controls_state() # Update recording button states based on new mode
 
     def select_video_file(self):
@@ -2004,6 +2071,9 @@ class MainWindow(QMainWindow):
             self.update_recording_status(self.app.is_currently_recording, self.app.frame_acquisition.recording_filepath)
         
         print(f"[MainWindow] sync_ui_to_app_state: UI synced. current_feed_mode='{self.current_feed_mode}', combo_index={self.feed_mode_combo.currentIndex()}")
+        
+        # Show/hide JugVid2cpp status panel based on current mode
+        self.jugvid2cpp_group.setVisible(self.current_feed_mode == "jugvid2cpp")
     
     # Watch IMU Methods
     
@@ -2259,6 +2329,9 @@ class MainWindow(QMainWindow):
                     self.imu_status_label.setText("Status: Connected (High-Performance)")
                     self.imu_status_label.setStyleSheet("color: green; font-weight: bold;")
                 
+                # Update IMU feeds with latest data
+                self._update_imu_feeds(latest_imu_data)
+                
                 # Simplified display - show only key information to prevent clutter
                 watch_count = len(latest_imu_data)
                 if watch_count == 1:
@@ -2316,6 +2389,51 @@ class MainWindow(QMainWindow):
             print(f"Error updating IMU data display: {e}")
             self.imu_data_display.setText(f"Error: {str(e)}")
             self.imu_data_display.setStyleSheet("background-color: #f8d7da; padding: 5px; border: 1px solid #dc3545;")
+    
+    def _update_imu_feeds(self, latest_imu_data):
+        """Update IMU feeds with the latest sensor data."""
+        try:
+            # Get current IMU feed IDs
+            imu_feeds = self.video_feed_manager.get_imu_feeds()
+            
+            # Create IMU feeds for new watches if they don't exist
+            for watch_name, data in latest_imu_data.items():
+                feed_id = f"imu_{watch_name}"
+                
+                if feed_id not in imu_feeds:
+                    # Create new IMU feed for this watch
+                    feed_name = f"{watch_name.upper()} Watch IMU"
+                    self.video_feed_manager.add_imu_feed(feed_name, feed_id, watch_name)
+                    print(f"Created IMU feed for {watch_name} watch")
+                
+                # Update the feed with latest data
+                # Convert the processed data back to the expected format
+                imu_data_for_feed = {
+                    'timestamp': data.get('timestamp', time.time()),
+                    'accel_x': data.get('accel_x', 0.0),
+                    'accel_y': data.get('accel_y', 0.0),
+                    'accel_z': data.get('accel_z', 0.0),
+                    'gyro_x': data.get('gyro_x', 0.0),
+                    'gyro_y': data.get('gyro_y', 0.0),
+                    'gyro_z': data.get('gyro_z', 0.0),
+                    'watch_name': watch_name
+                }
+                
+                self.video_feed_manager.update_imu_feed(feed_id, imu_data_for_feed)
+            
+            # Remove feeds for watches that are no longer active
+            active_watch_names = set(latest_imu_data.keys())
+            for feed_id in imu_feeds[:]:  # Create a copy to iterate over
+                if feed_id.startswith("imu_"):
+                    watch_name = feed_id[4:]  # Remove "imu_" prefix
+                    if watch_name not in active_watch_names:
+                        print(f"Removing IMU feed for inactive {watch_name} watch")
+                        self.video_feed_manager.remove_feed(feed_id)
+                        
+        except Exception as e:
+            print(f"Error updating IMU feeds: {e}")
+            import traceback
+            traceback.print_exc()
     
     def open_imu_monitoring_window(self):
         """Open the advanced IMU monitoring window."""
@@ -2446,3 +2564,187 @@ class MainWindow(QMainWindow):
             summary_lines.append(f"{feed_id}: {latency:.1f}ms, {fps:.1f}fps")
         
         return " | ".join(summary_lines)
+    
+    def update_jugvid2cpp_status_display(self):
+        """Update the JugVid2cpp status display with latest information."""
+        if not self.app or self.current_feed_mode != "jugvid2cpp":
+            return
+        
+        try:
+            # Check if JugVid2cpp interface is available and get status
+            if hasattr(self.app, 'frame_acquisition') and hasattr(self.app.frame_acquisition, 'get_status'):
+                status = self.app.frame_acquisition.get_status()
+                
+                # Update connection status
+                if status.get('is_running', False):
+                    if status.get('error_state', False):
+                        self.jugvid2cpp_status_label.setText("Status: Error")
+                        self.jugvid2cpp_status_label.setStyleSheet("color: red; font-weight: bold;")
+                        self.jugvid2cpp_error_label.setText(status.get('error_message', 'Unknown error'))
+                    else:
+                        self.jugvid2cpp_status_label.setText("Status: Connected")
+                        self.jugvid2cpp_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.jugvid2cpp_error_label.setText("")
+                else:
+                    self.jugvid2cpp_status_label.setText("Status: Not Running")
+                    self.jugvid2cpp_status_label.setStyleSheet("color: red; font-weight: bold;")
+                    self.jugvid2cpp_error_label.setText(status.get('error_message', ''))
+                
+                # Update ball tracking information
+                ball_count = status.get('last_frame_ball_count', 0)
+                queue_size = status.get('queue_size', 0)
+                
+                if ball_count > 0:
+                    # Get actual ball data for display
+                    if hasattr(self.app.frame_acquisition, 'get_identified_balls'):
+                        balls = self.app.frame_acquisition.get_identified_balls()
+                        ball_info_lines = []
+                        for ball in balls[:3]:  # Show up to 3 balls to avoid clutter
+                            if 'original_3d' in ball:
+                                x, y, z = ball['original_3d']
+                                ball_info_lines.append(f"{ball['name']}: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
+                        
+                        if len(balls) > 3:
+                            ball_info_lines.append(f"... and {len(balls) - 3} more")
+                        
+                        display_text = f"Tracking {ball_count} balls | Queue: {queue_size}\n" + "\n".join(ball_info_lines)
+                    else:
+                        display_text = f"Tracking {ball_count} balls | Queue: {queue_size}"
+                    
+                    self.jugvid2cpp_balls_label.setText(display_text)
+                    self.jugvid2cpp_balls_label.setStyleSheet("background-color: #e8f5e8; padding: 5px; border: 1px solid #4CAF50; font-size: 11px;")
+                else:
+                    self.jugvid2cpp_balls_label.setText(f"No balls detected | Queue: {queue_size}")
+                    self.jugvid2cpp_balls_label.setStyleSheet("background-color: #fff3cd; padding: 5px; border: 1px solid #ffc107; font-size: 11px;")
+            
+            else:
+                # JugVid2cpp interface not available
+                self.jugvid2cpp_status_label.setText("Status: Interface Not Available")
+                self.jugvid2cpp_status_label.setStyleSheet("color: red; font-weight: bold;")
+                self.jugvid2cpp_balls_label.setText("JugVid2cpp interface not initialized")
+                self.jugvid2cpp_balls_label.setStyleSheet("background-color: #f8d7da; padding: 5px; border: 1px solid #dc3545; font-size: 11px;")
+                self.jugvid2cpp_error_label.setText("Check that JugVid2cpp executable is available")
+        
+        except Exception as e:
+            print(f"Error updating JugVid2cpp status display: {e}")
+            self.jugvid2cpp_status_label.setText("Status: Display Error")
+            self.jugvid2cpp_status_label.setStyleSheet("color: red; font-weight: bold;")
+            self.jugvid2cpp_error_label.setText(f"Display error: {str(e)}")
+    
+    # IMU Feed Management Methods
+    
+    def toggle_imu_feeds(self, checked=None):
+        """
+        Toggle IMU feeds visibility.
+        
+        Args:
+            checked (bool): New state (optional)
+        """
+        if checked is None:
+            checked = self.toggle_imu_feeds_action.isChecked()
+        
+        if checked:
+            # Enable IMU feeds - they will be created automatically when data arrives
+            self.status_bar.showMessage("IMU feeds enabled", 3000)
+        else:
+            # Disable IMU feeds - remove all existing IMU feeds
+            imu_feeds = self.video_feed_manager.get_imu_feeds()
+            for feed_id in imu_feeds:
+                self.video_feed_manager.remove_feed(feed_id)
+            self.status_bar.showMessage("IMU feeds disabled", 3000)
+        
+        self.toggle_imu_feeds_action.setChecked(checked)
+    
+    def clear_all_imu_feed_data(self):
+        """Clear data from all IMU feeds."""
+        imu_feeds = self.video_feed_manager.get_imu_feeds()
+        for feed_id in imu_feeds:
+            self.video_feed_manager.clear_imu_feed_data(feed_id)
+        
+        self.status_bar.showMessage(f"Cleared data from {len(imu_feeds)} IMU feeds", 3000)
+    
+    def add_imu_feed_for_watch(self, watch_name):
+        """
+        Add an IMU feed for a specific watch.
+        
+        Args:
+            watch_name (str): Name of the watch (left, right, etc.)
+            
+        Returns:
+            str: The feed ID
+        """
+        if not self.toggle_imu_feeds_action.isChecked():
+            return None  # IMU feeds are disabled
+        
+        feed_id = f"imu_{watch_name}"
+        feed_name = f"{watch_name.upper()} Watch IMU"
+        
+        # Check if feed already exists
+        if feed_id in self.video_feed_manager.feeds:
+            return feed_id
+        
+        # Create the IMU feed
+        return self.video_feed_manager.add_imu_feed(feed_name, feed_id, watch_name)
+    
+    def remove_imu_feed_for_watch(self, watch_name):
+        """
+        Remove an IMU feed for a specific watch.
+        
+        Args:
+            watch_name (str): Name of the watch
+            
+        Returns:
+            bool: True if feed was removed
+        """
+        feed_id = f"imu_{watch_name}"
+        return self.video_feed_manager.remove_feed(feed_id)
+    
+    def configure_imu_feed_settings(self, history_length=100, auto_scale=True):
+        """
+        Configure settings for all IMU feeds.
+        
+        Args:
+            history_length (int): Number of data points to keep in history
+            auto_scale (bool): Enable auto-scaling of graphs
+        """
+        imu_feeds = self.video_feed_manager.get_imu_feeds()
+        for feed_id in imu_feeds:
+            self.video_feed_manager.set_imu_feed_settings(
+                feed_id,
+                history_length=history_length,
+                auto_scale=auto_scale
+            )
+        
+        self.status_bar.showMessage(f"Updated settings for {len(imu_feeds)} IMU feeds", 3000)
+    
+    def get_imu_feed_latencies(self):
+        """
+        Get latency information for all IMU feeds.
+        
+        Returns:
+            dict: feed_id -> latency_ms
+        """
+        imu_feeds = self.video_feed_manager.get_imu_feeds()
+        latencies = {}
+        
+        for feed_id in imu_feeds:
+            if feed_id in self.video_feed_manager.feeds:
+                latencies[feed_id] = self.video_feed_manager.feeds[feed_id].get_latency()
+        
+        return latencies
+    
+    def get_imu_feed_fps(self):
+        """
+        Get FPS information for all IMU feeds.
+        
+        Returns:
+            dict: feed_id -> fps
+        """
+        imu_feeds = self.video_feed_manager.get_imu_feeds()
+        fps_data = {}
+        
+        for feed_id in imu_feeds:
+            if feed_id in self.video_feed_manager.feeds:
+                fps_data[feed_id] = self.video_feed_manager.feeds[feed_id].get_fps()
+        
+        return fps_data

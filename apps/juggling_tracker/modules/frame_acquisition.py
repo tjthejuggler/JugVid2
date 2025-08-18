@@ -1,6 +1,15 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2
+import os
+import sys
+import time
+import atexit
+from pathlib import Path
+
+# Add core camera module to path
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+from core.camera.camera_resource_manager import CameraResourceManager, CameraResourceError
 
 class FrameAcquisition:
     """
@@ -13,7 +22,7 @@ class FrameAcquisition:
     - Providing access to camera intrinsics for 3D calculations
     """
     
-    def __init__(self, width=640, height=480, fps=30, mode='live', video_path=None, depth_only=False):
+    def __init__(self, width=640, height=480, fps=30, mode='live', video_path=None, depth_only=False, debug_camera=False):
         """
         Initialize the FrameAcquisition module.
         
@@ -24,6 +33,7 @@ class FrameAcquisition:
             mode (str): 'live' for RealSense camera, 'playback' for video file.
             video_path (str, optional): Path to the video file if mode is 'playback'.
             depth_only (bool): If True, only enable depth stream (for cable compatibility).
+            debug_camera (bool): Enable camera debugging output.
         """
         self.width = width
         self.height = height
@@ -31,6 +41,7 @@ class FrameAcquisition:
         self.mode = mode
         self.video_path = video_path
         self.depth_only = depth_only
+        self.debug_camera = debug_camera
         
         self.pipeline = None
         self.align = None
@@ -41,6 +52,18 @@ class FrameAcquisition:
         self.video_fps = 0
         self.is_recording = False
         self.recording_filepath = None
+        
+        # Camera resource management
+        self.camera_resource_manager = None
+        self.resource_lock_acquired = False
+        self.initialization_attempts = 0
+        self.max_initialization_attempts = 3
+        
+        # Register cleanup on exit
+        atexit.register(self._cleanup_on_exit)
+        
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] FrameAcquisition initialized in {mode} mode")
         
     def _initialize_live_stream(self, recording_config=None):
         """
@@ -120,20 +143,26 @@ class FrameAcquisition:
     def initialize(self):
         """
         Initialize the RealSense pipeline or video capture based on the mode.
+        Includes camera resource conflict detection and resolution.
         
         Returns:
             bool: True if initialization was successful, False otherwise
         """
+        self.initialization_attempts += 1
+        
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] Initializing FrameAcquisition (attempt {self.initialization_attempts}/{self.max_initialization_attempts})")
+        
         if self.mode == 'live':
-            return self._initialize_live_stream()
+            return self._initialize_live_with_resource_management()
         elif self.mode == 'playback':
             if not self.video_path:
-                print("Error: Video path not provided for playback mode.")
+                print("❌ Error: Video path not provided for playback mode.")
                 return False
             try:
                 self.video_capture = cv2.VideoCapture(self.video_path)
                 if not self.video_capture.isOpened():
-                    print(f"Error: Could not open video file: {self.video_path}")
+                    print(f"❌ Error: Could not open video file: {self.video_path}")
                     self.video_capture = None
                     return False
                 
@@ -142,9 +171,9 @@ class FrameAcquisition:
                 self.video_frame_count = int(self.video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
                 native_width = int(self.video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
                 native_height = int(self.video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                print(f"Playback Mode: Video '{self.video_path}' opened.")
-                print(f"Native resolution: {native_width}x{native_height}, FPS: {self.video_fps:.2f}")
-                print(f"Outputting at: {self.width}x{self.height}")
+                print(f"✅ Playback Mode: Video '{self.video_path}' opened.")
+                print(f"   Native resolution: {native_width}x{native_height}, FPS: {self.video_fps:.2f}")
+                print(f"   Outputting at: {self.width}x{self.height}")
 
                 # In playback mode, RealSense specific attributes are not available from generic video
                 self.intrinsics = None
@@ -152,15 +181,119 @@ class FrameAcquisition:
                 self.align = None
                 return True
             except Exception as e:
-                print(f"Error initializing video playback: {e}")
+                print(f"❌ Error initializing video playback: {e}")
                 return False
         else:
-            print(f"Error: Unknown mode '{self.mode}'")
+            print(f"❌ Error: Unknown mode '{self.mode}'")
             return False
+    
+    def _initialize_live_with_resource_management(self):
+        """
+        Initialize live RealSense stream with comprehensive resource management.
+        
+        Returns:
+            bool: True if initialization successful
+        """
+        if self.debug_camera:
+            print("🎥 [DEBUG] Starting live stream initialization with resource management")
+        
+        # Initialize camera resource manager
+        if not self.camera_resource_manager:
+            self.camera_resource_manager = CameraResourceManager(debug=self.debug_camera)
+        
+        # Check camera availability first
+        available, status_message = self.camera_resource_manager.check_camera_availability()
+        if self.debug_camera:
+            print(f"🎥 [DEBUG] Camera availability check: {available} - {status_message}")
+        
+        if not available:
+            print(f"🎥 Camera Resource Conflict Detected: {status_message}")
+            
+            # Try to resolve conflicts automatically on first attempt
+            if self.initialization_attempts == 1:
+                print("🔄 Attempting automatic conflict resolution...")
+                
+                # Try to acquire lock with cleanup
+                if self.camera_resource_manager.acquire_camera_lock(force_cleanup=False):
+                    self.resource_lock_acquired = True
+                    print("✅ Camera resource conflicts resolved automatically")
+                else:
+                    print("❌ Failed to resolve camera resource conflicts")
+                    return False
+            else:
+                print("❌ Camera resource conflicts persist after multiple attempts")
+                return False
+        else:
+            # Camera appears available, try to acquire lock
+            if not self.resource_lock_acquired:
+                if self.camera_resource_manager.acquire_camera_lock():
+                    self.resource_lock_acquired = True
+                    if self.debug_camera:
+                        print("🎥 [DEBUG] Camera resource lock acquired")
+                else:
+                    print("❌ Failed to acquire camera resource lock")
+                    return False
+        
+        # Now attempt RealSense initialization with enhanced error handling
+        try:
+            success = self._initialize_live_stream()
+            
+            if success:
+                print("✅ RealSense camera initialized successfully")
+                return True
+            else:
+                # If initialization failed, check if it's a resource issue
+                if self._is_resource_busy_error():
+                    print("🔄 RealSense initialization failed due to resource busy - attempting recovery...")
+                    
+                    # Force camera reset and retry
+                    if self.camera_resource_manager.force_camera_reset():
+                        print("🔄 Camera resources reset, retrying initialization...")
+                        time.sleep(2)  # Give camera time to reset
+                        
+                        success = self._initialize_live_stream()
+                        if success:
+                            print("✅ RealSense camera initialized after resource reset")
+                            return True
+                
+                print("❌ RealSense camera initialization failed")
+                return False
+                
+        except Exception as e:
+            error_msg = str(e).lower()
+            if 'device or resource busy' in error_msg or 'errno=16' in error_msg:
+                print(f"🎥 Resource Busy Error Detected: {e}")
+                
+                # This is the specific error we're trying to fix
+                if self.initialization_attempts < self.max_initialization_attempts:
+                    print(f"🔄 Attempting recovery (attempt {self.initialization_attempts + 1}/{self.max_initialization_attempts})...")
+                    
+                    # Force cleanup and retry
+                    if self.camera_resource_manager.force_camera_reset():
+                        time.sleep(3)  # Give more time for resource cleanup
+                        return self.initialize()  # Recursive retry
+                
+                print("❌ Failed to resolve 'Device or resource busy' error after multiple attempts")
+                return False
+            else:
+                print(f"❌ RealSense initialization error: {e}")
+                return False
+    
+    def _is_resource_busy_error(self):
+        """
+        Check if the last error was related to resource busy issues.
+        
+        Returns:
+            bool: True if resource busy error detected
+        """
+        # This is a simple heuristic - in a more advanced implementation,
+        # we could capture and analyze the specific RealSense error
+        return True  # Assume resource issues for now when initialization fails
     
     def get_frames(self):
         """
         Get frames based on the current mode (live camera or video playback).
+        Includes enhanced error handling for resource conflicts.
         
         Returns:
             tuple: (depth_frame, color_frame, depth_image, color_image) or (None, None, None, None)
@@ -168,19 +301,19 @@ class FrameAcquisition:
         """
         if self.mode == 'live':
             if self.pipeline is None:
-                print("Live pipeline not initialized. Call initialize() first.")
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Live pipeline not initialized. Call initialize() first.")
                 return None, None, None, None
             
             try:
-                # print("[DEBUG Roo FA] get_frames (live): Attempting to wait_for_frames().") # Roo log - too noisy for every frame
-                frames = self.pipeline.wait_for_frames(5000) # Keep timeout explicit
-                # print("[DEBUG Roo FA] get_frames (live): wait_for_frames() returned.") # Roo log
+                frames = self.pipeline.wait_for_frames(5000)  # Keep timeout explicit
                 
                 if self.depth_only:
                     # Depth-only mode: no alignment needed, no color frame
                     depth_frame = frames.get_depth_frame()
                     if not depth_frame:
-                        print("[DEBUG Roo FA] get_frames (live): Depth frame is None in depth-only mode.") # Roo log
+                        if self.debug_camera:
+                            print("🎥 [DEBUG] Depth frame is None in depth-only mode.")
                         return None, None, None, None
                     
                     depth_image = np.asanyarray(depth_frame.get_data())
@@ -191,27 +324,41 @@ class FrameAcquisition:
                 else:
                     # Normal mode: both depth and color with alignment
                     aligned_frames = self.align.process(frames)
-                    # print("[DEBUG Roo FA] get_frames (live): Frames aligned.") # Roo log
                     
                     depth_frame = aligned_frames.get_depth_frame()
                     color_frame = aligned_frames.get_color_frame()
                     
                     if not depth_frame or not color_frame:
-                        print("[DEBUG Roo FA] get_frames (live): Depth or Color frame is None after alignment.") # Roo log
+                        if self.debug_camera:
+                            print("🎥 [DEBUG] Depth or Color frame is None after alignment.")
                         return None, None, None, None
                     
                     depth_image = np.asanyarray(depth_frame.get_data())
                     color_image = np.asanyarray(color_frame.get_data())
-                    # print("[DEBUG Roo FA] get_frames (live): Frame data converted to numpy arrays.") # Roo log
                     
                     return depth_frame, color_frame, depth_image, color_image
-            except RuntimeError as e: # Catch specific RealSense errors
-                print(f"[DEBUG Roo FA] get_frames (live): RuntimeError: {e}") # Roo log
-                print(f"Error getting live frames: {e}")
+                    
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if self.debug_camera:
+                    print(f"🎥 [DEBUG] get_frames RuntimeError: {e}")
+                
+                # Check for specific resource busy errors
+                if 'device or resource busy' in error_msg or 'errno=16' in error_msg:
+                    print(f"🎥 Resource Busy Error in get_frames: {e}")
+                    # Don't attempt recovery here as it would be too frequent
+                    # Let the main application handle reinitialization
+                elif 'no device connected' in error_msg or 'device disconnected' in error_msg:
+                    print(f"🎥 Camera Disconnected: {e}")
+                else:
+                    print(f"🎥 RealSense Runtime Error: {e}")
+                
                 return None, None, None, None
-            except Exception as e: # Catch any other errors
-                print(f"[DEBUG Roo FA] get_frames (live): Unexpected Exception: {e}") # Roo log
-                print(f"Error getting live frames: {e}")
+                
+            except Exception as e:
+                if self.debug_camera:
+                    print(f"🎥 [DEBUG] get_frames Unexpected Exception: {e}")
+                print(f"🎥 Unexpected error getting frames: {e}")
                 return None, None, None, None
         
         elif self.mode == 'playback':
@@ -339,58 +486,101 @@ class FrameAcquisition:
     def stop(self):
         """
         Stop the RealSense pipeline or release video capture based on mode.
-        Also stops recording if active.
+        Also stops recording if active and releases camera resources.
         """
-        if self.is_recording:
-            print("Recording was active, stopping recording as part of general stop.")
-            # self.stop_recording() will call pipeline.stop() and then try to restart live.
-            # For a general stop, we just want to stop the pipeline.
-            if self.pipeline:
-                try:
-                    self.pipeline.stop()
-                    print(f"Recording stopped. File saved: {self.recording_filepath}")
-                except RuntimeError as e:
-                    print(f"Error stopping recording pipeline during general stop: {e}")
-                self.pipeline = None
+        if self.debug_camera:
+            print("🎥 [DEBUG] Stopping FrameAcquisition...")
+        
+        try:
+            if self.is_recording:
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Recording was active, stopping recording as part of general stop.")
+                # For a general stop, we just want to stop the pipeline.
+                if self.pipeline:
+                    try:
+                        self.pipeline.stop()
+                        print(f"✅ Recording stopped. File saved: {self.recording_filepath}")
+                    except RuntimeError as e:
+                        print(f"⚠️ Error stopping recording pipeline during general stop: {e}")
+                    self.pipeline = None
+                self.is_recording = False
+                self.recording_filepath = None
+
+            if self.mode == 'live':
+                self._stop_live_pipeline()
+            elif self.mode == 'playback':
+                self._stop_video_capture()
+            
+            # Release camera resource lock
+            self._release_camera_resources()
+            
+            # General cleanup of state flags
             self.is_recording = False
             self.recording_filepath = None
-            # After stopping a recording pipeline, it's fully stopped. No need to re-init here.
-
-        if self.mode == 'live':
-            if self.pipeline: # Check if pipeline object exists
-                try:
-                    # Check if the pipeline was actually started.
-                    # Calling stop() on a pipeline that was never started can raise an error.
-                    # A simple way to check is if a profile exists (pipeline.start() returns a profile)
-                    # However, checking internal state of pipeline_profile is tricky.
-                    # For now, rely on the try-except, but note that a pipeline object can exist
-                    # without having been successfully started.
-                    active_profile = self.pipeline.get_active_profile() # This will error if not started
-                    if active_profile: # Check if a profile is active
-                         self.pipeline.stop()
-                         print("RealSense pipeline stopped.")
-                except RuntimeError as e:
-                    # This error ("stop() cannot be called before start()") is common if initialize() failed.
-                    print(f"Info: Error stopping live pipeline (may not have been started or already stopped): {e}")
-                finally: # Ensure pipeline is reset regardless of stop success/failure
-                    self.pipeline = None
-            else:
-                print("Info: Live pipeline was None, nothing to stop.")
-            # self.align = None # These are re-acquired on init
-        elif self.mode == 'playback':
-            if self.video_capture: # Check if video_capture object exists
-                if self.video_capture.isOpened():
-                    self.video_capture.release()
-                    print("Video capture released.")
-                self.video_capture = None # Ensure reset
-            else:
-                print("Info: Video capture was None, nothing to stop.")
+            
+            if self.debug_camera:
+                print("✅ FrameAcquisition stopped successfully")
+                
+        except Exception as e:
+            print(f"❌ Error during FrameAcquisition stop: {e}")
+    
+    def _stop_live_pipeline(self):
+        """Stop the RealSense live pipeline safely."""
+        if self.pipeline:
+            try:
+                # Check if the pipeline was actually started
+                active_profile = self.pipeline.get_active_profile()
+                if active_profile:
+                    self.pipeline.stop()
+                    if self.debug_camera:
+                        print("🎥 [DEBUG] RealSense pipeline stopped.")
+                    else:
+                        print("✅ RealSense pipeline stopped.")
+            except RuntimeError as e:
+                # This error is common if initialize() failed or pipeline wasn't started
+                if self.debug_camera:
+                    print(f"🎥 [DEBUG] Info: Error stopping live pipeline (may not have been started): {e}")
+            finally:
+                self.pipeline = None
+        else:
+            if self.debug_camera:
+                print("🎥 [DEBUG] Live pipeline was None, nothing to stop.")
+    
+    def _stop_video_capture(self):
+        """Stop video capture safely."""
+        if self.video_capture:
+            if self.video_capture.isOpened():
+                self.video_capture.release()
+                print("✅ Video capture released.")
+            self.video_capture = None
+        else:
+            if self.debug_camera:
+                print("🎥 [DEBUG] Video capture was None, nothing to stop.")
+    
+    def _release_camera_resources(self):
+        """Release camera resource lock and cleanup."""
+        if self.camera_resource_manager and self.resource_lock_acquired:
+            try:
+                self.camera_resource_manager.release_camera_lock()
+                self.resource_lock_acquired = False
+                if self.debug_camera:
+                    print("🎥 [DEBUG] Camera resource lock released")
+            except Exception as e:
+                print(f"⚠️ Error releasing camera resource lock: {e}")
+    
+    def _cleanup_on_exit(self):
+        """Cleanup method called on application exit."""
+        if self.debug_camera:
+            print("🎥 [DEBUG] FrameAcquisition cleanup on exit")
         
-        # General cleanup of state flags related to active streaming/recording
-        self.is_recording = False
-        # self.recording_filepath = None # Keep last path for potential UI display? Or clear? Let's clear.
-        self.recording_filepath = None
-
-        # self.intrinsics = None # Keep these as they might be from a valid previous session
-        # self.depth_scale = None
-        # self.align = None
+        try:
+            self.stop()
+        except Exception as e:
+            print(f"⚠️ Error during exit cleanup: {e}")
+    
+    def __del__(self):
+        """Destructor to ensure resources are cleaned up."""
+        try:
+            self._cleanup_on_exit()
+        except:
+            pass  # Ignore errors during destruction

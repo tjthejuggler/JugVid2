@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 
 # Try to import high-performance system first
 try:
-    from high_performance_imu_stream import (
+    from core.imu.high_performance_imu_stream import (
         OptimizedWatchIMUManager,
         HighPerformanceIMUManager
     )

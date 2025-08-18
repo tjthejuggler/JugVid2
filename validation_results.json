@@ -1,0 +1,43 @@
+{
+  "imports": {
+    "main_window": false,
+    "smart_imu_manager": true,
+    "high_performance_imu": true,
+    "legacy_imu": true
+  },
+  "imu_system": {
+    "system_available": true,
+    "manager_created": true,
+    "system_type": "high_performance",
+    "performance_info": {
+      "system": "High-Performance",
+      "expected_latency_ms": 0.1,
+      "expected_throughput_hz": 5000,
+      "cpu_efficiency": "67% better",
+      "memory_efficiency": "95% better",
+      "current_stats": {
+        "data_rate": 0.0,
+        "latency_ms": 0.0,
+        "buffer_usage": 0.0,
+        "dropped_packets": 0,
+        "messages_received": 0,
+        "messages_processed": 0,
+        "buffer_overflows": 0,
+        "conversion_errors": 0
+      }
+    },
+    "using_high_performance": true
+  },
+  "gui_components": {
+    "error": "No module named 'juggling_tracker'"
+  },
+  "connection_simulation": {
+    "error": "No module named 'juggling_tracker'"
+  },
+  "error_handling": {
+    "error": "No module named 'juggling_tracker'"
+  },
+  "debug_output": {
+    "error": "No module named 'juggling_tracker'"
+  }
+}

@@ -441,7 +441,7 @@ class OptimizedIMUIntegration:
         self.watch_ips = watch_ips or ["127.0.0.1", "127.0.0.1"]
         
         # Import high-performance manager
-        from high_performance_imu_stream import OptimizedWatchIMUManager
+        from core.imu.high_performance_imu_stream import OptimizedWatchIMUManager
         
         # Create optimized manager
         self.imu_manager = OptimizedWatchIMUManager(watch_ips=self.watch_ips)
@@ -496,7 +496,7 @@ class OptimizedIMUIntegration:
 if __name__ == "__main__":
     import sys
     from PyQt6.QtWidgets import QApplication
-    from high_performance_imu_stream import HighPerformanceIMUManager
+    from core.imu.high_performance_imu_stream import HighPerformanceIMUManager
     
     app = QApplication(sys.argv)
     
