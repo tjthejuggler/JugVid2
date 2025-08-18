@@ -52,11 +52,20 @@ JugVid2/
 
 ## Projects
 
-### 1. Juggling Tracker ⭐ ENHANCED with Real-time IMU!
-A robust juggling ball tracking system using Intel RealSense depth cameras, now with high-performance JugVid2cpp integration and **real-time Watch IMU streaming**.
+### 1. Juggling Tracker ⭐ ENHANCED with Dynamic Video Feeds & Real-time IMU!
+A robust juggling ball tracking system using Intel RealSense depth cameras, now with **dynamic multi-feed layout system**, high-performance JugVid2cpp integration and **real-time Watch IMU streaming**.
+
+**🚀 NEW: Dynamic Video Feed System (2025-08-18):**
+- **Multi-Feed Display**: Support for up to 6 simultaneous video feeds with automatic layout management
+- **Dynamic Layout**: 1-3 feeds in single row, 4-6 feeds in two rows (max 3 per row)
+- **Real-time Latency Monitoring**: Each feed displays current latency in milliseconds and FPS
+- **Automatic Resizing**: Window and UI elements adjust dynamically based on feed count
+- **Feed Management API**: Add, remove, and configure feeds programmatically
+- **Performance Optimized**: Efficient rendering and memory management for smooth operation
 
 **Features:**
 - Real-time juggling ball tracking using color and depth data.
+- **🚀 NEW: Dynamic Multi-Feed Layout**: Display multiple video streams simultaneously with automatic layout optimization
 - **🚀 NEW: Real-time Watch IMU Streaming**: Live accelerometer and gyroscope data from dual Android watches via WebSocket
 - **JugVid2cpp Integration**: High-performance C++ 3D ball tracking at up to 90 FPS.
 - **Multiple Input Modes**: RealSense cameras, webcams, video playback, and JugVid2cpp.
@@ -99,6 +108,16 @@ A robust juggling ball tracking system using Intel RealSense depth cameras, now 
    ```bash
    python -m juggling_tracker.main --jugvid2cpp
    ```
+
+**Video Feed System Testing:**
+1. Test the new multi-feed system:
+   ```bash
+   python test_video_feed_system.py
+   ```
+2. Demo different feed configurations in the main app:
+   - Use menu: View → Demo Feed Configurations (Ctrl+F)
+   - Test 1-6 feeds with automatic layout switching
+   - Monitor real-time latency and FPS for each feed
 
 **Real-time IMU Streaming Setup:**
 1. Install Watch OS IMU apps on both watches (left and right wrist)
@@ -719,8 +738,13 @@ python tools/debug/debug_imu_performance.py  # Direct usage
 -   `ball_identifier`: Identifies balls based on color and other features.
 -   `multi_ball_tracker`: Tracks multiple balls over time.
 -   `simple_tracker`: Provides basic object tracking based on masks.
--   `ui`: Contains Qt-based UI components (`main_window`, etc.).
+-   `ui`: Contains Qt-based UI components (`main_window`, `video_feed_manager`, etc.).
 -   `extensions`: Framework for adding plugins and extensions.
+
+### Video Feed System Modules ⭐ NEW!
+-   `video_feed_manager`: Dynamic multi-feed layout system with latency monitoring.
+-   `video_feed_widget`: Individual feed display widget with performance metrics.
+-   `test_video_feed_system`: Comprehensive test suite for the video feed system.
 
 ### Stillness Recorder Modules
 -   `motion_detector`: Advanced motion detection using background subtraction and frame differencing.

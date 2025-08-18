@@ -19,6 +19,7 @@ from juggling_tracker.modules.ball_definer import BallDefiner
 from juggling_tracker.modules.ball_profile_manager import BallProfileManager
 from .simple_tracking_window import SimpleTrackingWindow
 from .imu_monitoring_window import IMUMonitoringWindow
+from .video_feed_manager import VideoFeedManager
 
 class MainWindow(QMainWindow):
     """
@@ -125,14 +126,15 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
         
-        # Create video display widget
-        self.video_label = QLabel(self)
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
-        self.video_label.setStyleSheet("background-color: #000000;")
+        # Create video feed manager
+        self.video_feed_manager = VideoFeedManager(self)
+        self.video_feed_manager.feeds_changed.connect(self.on_feeds_changed)
         
-        # Add video display to main layout
-        self.main_layout.addWidget(self.video_label)
+        # Add video feed manager to main layout
+        self.main_layout.addWidget(self.video_feed_manager)
+        
+        # Keep reference to old video_label for compatibility during transition
+        self.video_label = None
         
         # Create controls layout for ball definition
         self.ball_controls_layout = QHBoxLayout()
@@ -288,12 +290,8 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.simple_tracking_settings_btn)
         self.main_layout.addWidget(self.tracked_balls_scroll)
         
-        # Mouse event handling for the video label
-        if hasattr(self, 'video_label'):
-            self.video_label.mousePressEvent = self.video_label_mouse_press
-            self.video_label.mouseMoveEvent = self.video_label_mouse_move
-            self.video_label.mouseReleaseEvent = self.video_label_mouse_release
-            self.video_label.setMouseTracking(True)  # Important for mouseMoveEvent without button press
+        # Mouse event handling will be handled by individual feed widgets
+        # TODO: Implement mouse events for feed widgets if needed for ball definition
         
         # Create status bar
         self.status_bar = QStatusBar(self)
@@ -437,6 +435,14 @@ class MainWindow(QMainWindow):
         self.reset_view_action.triggered.connect(self.reset_view)
         self.view_menu.addAction(self.reset_view_action)
         
+        self.view_menu.addSeparator()
+        
+        # Demo feed configurations action
+        self.demo_feeds_action = QAction("Demo &Feed Configurations", self)
+        self.demo_feeds_action.setShortcut(QKeySequence("Ctrl+F"))
+        self.demo_feeds_action.triggered.connect(self.demo_feed_configurations)
+        self.view_menu.addAction(self.demo_feeds_action)
+        
         # Extensions menu
         self.extensions_menu = self.menu_bar.addMenu("&Extensions")
         
@@ -532,6 +538,34 @@ class MainWindow(QMainWindow):
         # Update IMU data display if available
         self.update_imu_data_display()
     
+    def on_feeds_changed(self, feed_count):
+        """
+        Handle changes in the number of video feeds.
+        
+        Args:
+            feed_count (int): New number of feeds
+        """
+        print(f"Feed count changed to: {feed_count}")
+        
+        # Update window title to show feed count
+        base_title = "Juggling Tracker"
+        if feed_count > 0:
+            self.setWindowTitle(f"{base_title} - {feed_count} Feed{'s' if feed_count != 1 else ''}")
+        else:
+            self.setWindowTitle(base_title)
+        
+        # Adjust minimum window size based on feed count
+        if feed_count <= 3:
+            # Single row layout
+            min_width = max(1280, feed_count * 320)
+            min_height = 720
+        else:
+            # Two row layout
+            min_width = max(1280, 3 * 320)
+            min_height = 900  # Taller for two rows
+            
+        self.setMinimumSize(min_width, min_height)
+    
     def update_frame(self, color_image, depth_image=None, masks=None, identified_balls=None,
                     hand_positions=None, extension_results=None, debug_info=None, tracked_balls_for_display=None, simple_tracking=None):
         """
@@ -552,164 +586,29 @@ class MainWindow(QMainWindow):
             print("Warning: update_frame called with None color_image")
             return
         
-        # First, make a copy of the color image to draw on
-        display_image = color_image.copy()
-        
-        # Create a composite view with color and depth images
-        composite = self.create_composite_view(color_image, depth_image, masks)
-        
-        # ------------ TEMPORARY DEBUG START ------------
-        if composite is not None:
-            print(f"[MainWindow] update_frame: Composite image for QImage: shape={composite.shape}, dtype={composite.dtype}, flags={composite.flags.c_contiguous}")
-            # Ensure composite is C-contiguous
-            if not composite.flags['C_CONTIGUOUS']:
-                print("[MainWindow] update_frame: Composite not C-contiguous, making it so.")
-                composite = np.ascontiguousarray(composite)
-        else:
-            print("[MainWindow] update_frame: Composite is None before QImage creation!")
-            return # Can't proceed
-        # ------------ TEMPORARY DEBUG END ------------
-
-        # Convert the OpenCV image to a Qt image
-        height, width, channel = composite.shape
-        bytes_per_line = 3 * width
-        q_img = QImage(composite.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
-        
-        # Create a pixmap from the Qt image
-        pixmap_to_display = QPixmap.fromImage(q_img)
-        
-        # Create a copy of the pixmap for drawing
-        final_pixmap_for_display = pixmap_to_display.copy()
-        painter = QPainter(final_pixmap_for_display)
-        
-        # Draw tracked balls if available
+        # Store the tracked balls data for the panel
         if tracked_balls_for_display:
-            # Store the tracked balls data for the panel
             self.tracked_balls_data = tracked_balls_for_display
-            
-            # Update the tracked balls panel
             self.update_tracked_balls_panel()
-            
-            for ball_info in tracked_balls_for_display:
-                # Extract ball information
-                pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
-                radius = int(ball_info['radius_px'])
-                ball_name = ball_info['name']
-                ball_id_display = ball_info['id']
-                
-                # Skip drawing if position is outside the visible area
-                # This prevents drawing on the depth image portion if it's shown
-                if self.show_depth and pos_x >= color_image.shape[1]:
-                    continue
-                
-                # Set pen color based on profile_id to distinguish different balls
-                # Create a simple hash of the profile_id to get a consistent color
-                profile_id = ball_info.get('profile_id', '')
-                color_hash = hash(profile_id) % 0xFFFFFF
-                r = (color_hash & 0xFF0000) >> 16
-                g = (color_hash & 0x00FF00) >> 8
-                b = color_hash & 0x0000FF
-                
-                # Make sure the color is bright enough to be visible
-                brightness = (r * 299 + g * 587 + b * 114) / 1000
-                if brightness < 128:  # If too dark
-                    r = min(255, r + 100)
-                    g = min(255, g + 100)
-                    b = min(255, b + 100)
-                
-                # Use gray for disappeared balls, otherwise use the profile-specific color
-                if ball_info['disappeared_frames'] > 0:
-                    pen_color = Qt.GlobalColor.yellow  # Yellow for predicted positions
-                else:
-                    pen_color = QColor(r, g, b)
-                
-                # Set up pen for drawing - make it more visible with thicker line
-                pen = QPen(pen_color, 3)  # 3px thick line for better visibility
-                painter.setPen(pen)
-                
-                # Draw the ball circle
-                if radius > 0:
-                    # Draw a more visible circle around the ball
-                    painter.drawEllipse(pos_x - radius, pos_y - radius, radius * 2, radius * 2)
-                
-                # Draw text with contrasting background for better visibility
-                text = f"{ball_name} (ID:{ball_id_display})"
-                
-                # Create a background rectangle for text
-                font = painter.font()
-                font_metrics = QFontMetrics(font)
-                text_width = font_metrics.horizontalAdvance(text)
-                text_height = font_metrics.height()
-                
-                # Draw text background
-                painter.fillRect(pos_x - text_width//2, pos_y + radius + 5,
-                                text_width + 10, text_height + 5, QColor(0, 0, 0, 180))
-                
-                # Draw text in bright color
-                painter.setPen(QPen(Qt.GlobalColor.white))
-                painter.drawText(pos_x - text_width//2 + 5, pos_y + radius + text_height + 5, text)
         
-        # Draw simple tracking results if available and enabled
-        if simple_tracking and self.show_simple_tracking:
-            # Draw average position
-            avg_pos = simple_tracking.get('average_position')
-            if avg_pos:
-                # Draw a large cross at the average position
-                cross_size = 20
-                painter.setPen(QPen(Qt.GlobalColor.cyan, 4))
-                painter.drawLine(avg_pos[0] - cross_size, avg_pos[1], avg_pos[0] + cross_size, avg_pos[1])
-                painter.drawLine(avg_pos[0], avg_pos[1] - cross_size, avg_pos[0], avg_pos[1] + cross_size)
-                
-                # Draw a circle around the average position
-                painter.setPen(QPen(Qt.GlobalColor.cyan, 2))
-                painter.drawEllipse(avg_pos[0] - 15, avg_pos[1] - 15, 30, 30)
-                
-                # Draw text showing tracking info
-                tracking_text = f"Avg: ({avg_pos[0]}, {avg_pos[1]})"
-                object_count = simple_tracking.get('object_count', 0)
-                total_area = simple_tracking.get('total_area', 0)
-                info_text = f"Objects: {object_count}, Area: {total_area:.0f}px"
-                
-                # Draw text background
-                font = painter.font()
-                font_metrics = QFontMetrics(font)
-                text_width = max(font_metrics.horizontalAdvance(tracking_text), font_metrics.horizontalAdvance(info_text))
-                text_height = font_metrics.height()
-                
-                painter.fillRect(avg_pos[0] - text_width//2 - 5, avg_pos[1] - 40,
-                                text_width + 10, text_height * 2 + 10, QColor(0, 0, 0, 180))
-                
-                # Draw text
-                painter.setPen(QPen(Qt.GlobalColor.cyan))
-                painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 25, tracking_text)
-                painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 10, info_text)
-            
-            # Draw individual object positions
-            individual_positions = simple_tracking.get('individual_positions', [])
-            for i, pos in enumerate(individual_positions):
-                painter.setPen(QPen(Qt.GlobalColor.magenta, 2))
-                painter.drawEllipse(pos[0] - 5, pos[1] - 5, 10, 10)
-                
-                # Draw small number label
-                painter.setPen(QPen(Qt.GlobalColor.white))
-                painter.drawText(pos[0] + 8, pos[1] - 8, str(i + 1))
+        # Ensure we have at least one feed for the main display
+        if self.video_feed_manager.get_feed_count() == 0:
+            # Add the main feed
+            main_feed_id = self.video_feed_manager.add_feed("Main Feed", "main")
         
-        # Draw ROI rectangle if in ball definition mode
-        if self.is_defining_ball_mode and self.defining_roi_current_rect:
-            pen = QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.SolidLine)
-            painter.setPen(pen)
-            x, y, w, h = self.defining_roi_current_rect
-            
-            # Only draw ROI on the color image portion if depth is shown
-            if self.show_depth and x >= color_image.shape[1]:
-                # Skip drawing ROI on depth image portion
-                pass
-            else:
-                painter.drawRect(x, y, w, h)
+        # Create different feed views
+        feeds_to_update = self._create_feed_views(color_image, depth_image, masks,
+                                                 tracked_balls_for_display, simple_tracking,
+                                                 hand_positions, debug_info)
         
-        # End painting and display the result
-        painter.end()
-        self.video_label.setPixmap(final_pixmap_for_display)
+        # Update each feed (only if we have valid content)
+        if feeds_to_update:
+            for feed_id, pixmap in feeds_to_update.items():
+                if pixmap and not pixmap.isNull():
+                    self.video_feed_manager.update_feed(feed_id, pixmap)
+        else:
+            # Create a status feed showing camera issues
+            self._create_camera_error_feed()
         
         # Update status bar
         if debug_info:
@@ -722,6 +621,315 @@ class MainWindow(QMainWindow):
         # Update FPS
         if hasattr(self.app, 'fps'):
             self.fps_label.setText(f"FPS: {self.app.fps:.1f}")
+    
+    def _create_feed_views(self, color_image, depth_image, masks, tracked_balls_for_display,
+                          simple_tracking, hand_positions, debug_info):
+        """
+        Create different feed views based on current display settings.
+        
+        Returns:
+            dict: feed_id -> QPixmap mapping
+        """
+        feeds = {}
+        
+        # Always create main composite view
+        composite = self.create_composite_view(color_image, depth_image, masks)
+        if composite is not None:
+            # Ensure composite is C-contiguous
+            if not composite.flags['C_CONTIGUOUS']:
+                composite = np.ascontiguousarray(composite)
+            
+            # Create pixmap with overlays
+            pixmap = self._create_pixmap_with_overlays(composite, color_image, tracked_balls_for_display,
+                                                     simple_tracking, hand_positions)
+            feeds["main"] = pixmap
+        
+        # Create additional feeds based on settings
+        if self.show_depth and depth_image is not None:
+            # Add separate depth feed if not already in composite
+            if not self._is_depth_in_composite():
+                depth_pixmap = self._create_depth_pixmap(depth_image)
+                if depth_pixmap:
+                    feeds["depth"] = depth_pixmap
+        
+        if self.show_masks and masks:
+            # Add separate mask feeds
+            for mask_name, mask in masks.items():
+                if mask is not None:
+                    mask_pixmap = self._create_mask_pixmap(mask, mask_name)
+                    if mask_pixmap:
+                        feeds[f"mask_{mask_name.lower()}"] = mask_pixmap
+        
+        if self.show_simple_tracking_mask and hasattr(self.app, 'simple_tracker'):
+            # Add simple tracking mask feed
+            tracking_mask_pixmap = self._create_simple_tracking_mask_pixmap(color_image)
+            if tracking_mask_pixmap:
+                feeds["simple_tracking_mask"] = tracking_mask_pixmap
+        
+        return feeds
+    
+    def _create_pixmap_with_overlays(self, composite_image, color_image, tracked_balls_for_display,
+                                   simple_tracking, hand_positions):
+        """Create a QPixmap from composite image with overlays."""
+        # Convert the OpenCV image to a Qt image
+        height, width, channel = composite_image.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(composite_image.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+        
+        # Create a pixmap from the Qt image
+        pixmap = QPixmap.fromImage(q_img)
+        
+        # Create a copy for drawing overlays
+        final_pixmap = pixmap.copy()
+        painter = QPainter(final_pixmap)
+        
+        # Draw tracked balls if available
+        if tracked_balls_for_display:
+            self._draw_tracked_balls(painter, tracked_balls_for_display, color_image)
+        
+        # Draw simple tracking results if available and enabled
+        if simple_tracking and self.show_simple_tracking:
+            self._draw_simple_tracking(painter, simple_tracking)
+        
+        # Draw ROI rectangle if in ball definition mode
+        if self.is_defining_ball_mode and self.defining_roi_current_rect:
+            self._draw_roi_rectangle(painter, color_image)
+        
+        painter.end()
+        return final_pixmap
+    
+    def _draw_tracked_balls(self, painter, tracked_balls_for_display, color_image):
+        """Draw tracked balls on the painter."""
+        for ball_info in tracked_balls_for_display:
+            # Extract ball information
+            pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
+            radius = int(ball_info['radius_px'])
+            ball_name = ball_info['name']
+            ball_id_display = ball_info['id']
+            
+            # Skip drawing if position is outside the visible area
+            if self.show_depth and pos_x >= color_image.shape[1]:
+                continue
+            
+            # Set pen color based on profile_id to distinguish different balls
+            profile_id = ball_info.get('profile_id', '')
+            color_hash = hash(profile_id) % 0xFFFFFF
+            r = (color_hash & 0xFF0000) >> 16
+            g = (color_hash & 0x00FF00) >> 8
+            b = color_hash & 0x0000FF
+            
+            # Make sure the color is bright enough to be visible
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            if brightness < 128:  # If too dark
+                r = min(255, r + 100)
+                g = min(255, g + 100)
+                b = min(255, b + 100)
+            
+            # Use yellow for disappeared balls, otherwise use the profile-specific color
+            if ball_info['disappeared_frames'] > 0:
+                pen_color = Qt.GlobalColor.yellow
+            else:
+                pen_color = QColor(r, g, b)
+            
+            # Set up pen for drawing
+            pen = QPen(pen_color, 3)
+            painter.setPen(pen)
+            
+            # Draw the ball circle
+            if radius > 0:
+                painter.drawEllipse(pos_x - radius, pos_y - radius, radius * 2, radius * 2)
+            
+            # Draw text with contrasting background
+            text = f"{ball_name} (ID:{ball_id_display})"
+            font = painter.font()
+            font_metrics = QFontMetrics(font)
+            text_width = font_metrics.horizontalAdvance(text)
+            text_height = font_metrics.height()
+            
+            # Draw text background
+            painter.fillRect(pos_x - text_width//2, pos_y + radius + 5,
+                            text_width + 10, text_height + 5, QColor(0, 0, 0, 180))
+            
+            # Draw text in bright color
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(pos_x - text_width//2 + 5, pos_y + radius + text_height + 5, text)
+    
+    def _draw_simple_tracking(self, painter, simple_tracking):
+        """Draw simple tracking overlays on the painter."""
+        avg_pos = simple_tracking.get('average_position')
+        if avg_pos:
+            # Draw a large cross at the average position
+            cross_size = 20
+            painter.setPen(QPen(Qt.GlobalColor.cyan, 4))
+            painter.drawLine(avg_pos[0] - cross_size, avg_pos[1], avg_pos[0] + cross_size, avg_pos[1])
+            painter.drawLine(avg_pos[0], avg_pos[1] - cross_size, avg_pos[0], avg_pos[1] + cross_size)
+            
+            # Draw a circle around the average position
+            painter.setPen(QPen(Qt.GlobalColor.cyan, 2))
+            painter.drawEllipse(avg_pos[0] - 15, avg_pos[1] - 15, 30, 30)
+            
+            # Draw text showing tracking info
+            tracking_text = f"Avg: ({avg_pos[0]}, {avg_pos[1]})"
+            object_count = simple_tracking.get('object_count', 0)
+            total_area = simple_tracking.get('total_area', 0)
+            info_text = f"Objects: {object_count}, Area: {total_area:.0f}px"
+            
+            # Draw text background
+            font = painter.font()
+            font_metrics = QFontMetrics(font)
+            text_width = max(font_metrics.horizontalAdvance(tracking_text), font_metrics.horizontalAdvance(info_text))
+            text_height = font_metrics.height()
+            
+            painter.fillRect(avg_pos[0] - text_width//2 - 5, avg_pos[1] - 40,
+                            text_width + 10, text_height * 2 + 10, QColor(0, 0, 0, 180))
+            
+            # Draw text
+            painter.setPen(QPen(Qt.GlobalColor.cyan))
+            painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 25, tracking_text)
+            painter.drawText(avg_pos[0] - text_width//2, avg_pos[1] - 10, info_text)
+        
+        # Draw individual object positions
+        individual_positions = simple_tracking.get('individual_positions', [])
+        for i, pos in enumerate(individual_positions):
+            painter.setPen(QPen(Qt.GlobalColor.magenta, 2))
+            painter.drawEllipse(pos[0] - 5, pos[1] - 5, 10, 10)
+            
+            # Draw small number label
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(pos[0] + 8, pos[1] - 8, str(i + 1))
+    
+    def _draw_roi_rectangle(self, painter, color_image):
+        """Draw ROI rectangle for ball definition."""
+        pen = QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.SolidLine)
+        painter.setPen(pen)
+        x, y, w, h = self.defining_roi_current_rect
+        
+        # Only draw ROI on the color image portion if depth is shown
+        if self.show_depth and x >= color_image.shape[1]:
+            pass  # Skip drawing ROI on depth image portion
+        else:
+            painter.drawRect(x, y, w, h)
+    
+    def _is_depth_in_composite(self):
+        """Check if depth is already included in the composite view."""
+        return self.show_depth
+    
+    def _create_depth_pixmap(self, depth_image):
+        """Create a pixmap from depth image."""
+        try:
+            if len(depth_image.shape) == 3:
+                depth_image_gray = depth_image[:,:,0]
+            else:
+                depth_image_gray = depth_image
+            
+            if np.any(depth_image_gray):
+                depth_normalized = cv2.convertScaleAbs(depth_image_gray, alpha=0.03)
+            else:
+                depth_normalized = np.zeros_like(depth_image_gray, dtype=np.uint8)
+            
+            depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+            
+            # Convert to QPixmap
+            height, width, channel = depth_colormap.shape
+            bytes_per_line = 3 * width
+            q_img = QImage(depth_colormap.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+            return QPixmap.fromImage(q_img)
+        except Exception as e:
+            print(f"Error creating depth pixmap: {e}")
+            return None
+    
+    def _create_mask_pixmap(self, mask, mask_name):
+        """Create a pixmap from mask."""
+        try:
+            # Convert mask to BGR for visualization
+            mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            
+            # Add the mask name
+            cv2.putText(mask_bgr, f"{mask_name} Mask", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Convert to QPixmap
+            height, width, channel = mask_bgr.shape
+            bytes_per_line = 3 * width
+            q_img = QImage(mask_bgr.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+            return QPixmap.fromImage(q_img)
+        except Exception as e:
+            print(f"Error creating mask pixmap for {mask_name}: {e}")
+            return None
+    
+    def _create_simple_tracking_mask_pixmap(self, color_image):
+        """Create a pixmap for simple tracking mask."""
+        try:
+            # This is a simplified version - in practice you'd recreate the tracking mask
+            # For now, create a placeholder
+            placeholder = np.zeros((color_image.shape[0], color_image.shape[1], 3), dtype=np.uint8)
+            cv2.putText(placeholder, "Simple Tracking Mask", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            
+            # Convert to QPixmap
+            height, width, channel = placeholder.shape
+            bytes_per_line = 3 * width
+            q_img = QImage(placeholder.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+            return QPixmap.fromImage(q_img)
+        except Exception as e:
+            print(f"Error creating simple tracking mask pixmap: {e}")
+            return None
+    
+    def _create_error_status_image(self, debug_info):
+        """Create an error status image when camera fails."""
+        try:
+            # Create a 640x480 error image
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
+            img[:] = (40, 40, 40)  # Dark gray background
+            
+            # Add error message
+            cv2.putText(img, "CAMERA ERROR", (200, 200),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+            cv2.putText(img, "No frames received from camera", (150, 250),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            
+            # Add mode information if available
+            if debug_info and 'Mode' in debug_info:
+                cv2.putText(img, f"Mode: {debug_info['Mode']}", (50, 300),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Add troubleshooting info
+            cv2.putText(img, "Try:", (50, 350),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(img, "1. Check camera connection", (70, 380),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(img, "2. Switch to webcam mode", (70, 400),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(img, "3. Use video playback mode", (70, 420),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            return img
+        except Exception as e:
+            print(f"Error creating error status image: {e}")
+            return None
+    
+    def _numpy_to_pixmap(self, img):
+        """Convert numpy array to QPixmap."""
+        try:
+            height, width, channel = img.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(img.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
+            return QPixmap.fromImage(q_image)
+        except Exception as e:
+            print(f"Error converting numpy to pixmap: {e}")
+            return QPixmap()
+    
+    def _create_camera_error_feed(self):
+        """Create a camera error feed when no valid frames are available."""
+        try:
+            error_image = self._create_error_status_image({"Mode": "Camera Error"})
+            if error_image is not None:
+                pixmap = self._numpy_to_pixmap(error_image)
+                if self.video_feed_manager.get_feed_count() == 0:
+                    self.video_feed_manager.add_feed("Camera Error", "error")
+                self.video_feed_manager.update_feed("main", pixmap)
+        except Exception as e:
+            print(f"Error creating camera error feed: {e}")
     
     def create_composite_view(self, color_image, depth_image=None, masks=None):
         if color_image is None:
@@ -2082,3 +2290,123 @@ class MainWindow(QMainWindow):
         self.imu_monitoring_window.show()
         self.imu_monitoring_window.raise_()
         self.imu_monitoring_window.activateWindow()
+    
+    # Video Feed Management Methods
+    
+    def add_video_feed(self, feed_name, feed_id=None):
+        """
+        Add a new video feed to the display.
+        
+        Args:
+            feed_name (str): Display name for the feed
+            feed_id (str, optional): Unique ID for the feed
+            
+        Returns:
+            str: The feed ID
+        """
+        return self.video_feed_manager.add_feed(feed_name, feed_id)
+    
+    def remove_video_feed(self, feed_id):
+        """
+        Remove a video feed from the display.
+        
+        Args:
+            feed_id (str): ID of the feed to remove
+            
+        Returns:
+            bool: True if feed was removed, False if not found
+        """
+        return self.video_feed_manager.remove_feed(feed_id)
+    
+    def get_feed_latencies(self):
+        """
+        Get latency information for all active feeds.
+        
+        Returns:
+            dict: feed_id -> latency_ms
+        """
+        return self.video_feed_manager.get_feed_latencies()
+    
+    def get_feed_fps(self):
+        """
+        Get FPS information for all active feeds.
+        
+        Returns:
+            dict: feed_id -> fps
+        """
+        return self.video_feed_manager.get_feed_fps()
+    
+    def set_feed_name(self, feed_id, name):
+        """
+        Set the display name for a feed.
+        
+        Args:
+            feed_id (str): ID of the feed
+            name (str): New display name
+        """
+        self.video_feed_manager.set_feed_name(feed_id, name)
+    
+    def clear_all_feeds(self):
+        """Remove all video feeds."""
+        self.video_feed_manager.clear_all_feeds()
+    
+    # Testing and Demo Methods
+    
+    def demo_feed_configurations(self):
+        """Demo method to test different feed configurations."""
+        print("Starting feed configuration demo...")
+        
+        # Clear existing feeds
+        self.clear_all_feeds()
+        
+        # Test 1 feed
+        print("Testing 1 feed...")
+        self.add_video_feed("Main Camera", "main")
+        
+        # Test 3 feeds (single row)
+        QTimer.singleShot(2000, lambda: self._demo_add_feeds(3))
+        
+        # Test 6 feeds (two rows)
+        QTimer.singleShot(4000, lambda: self._demo_add_feeds(6))
+        
+        # Test back to 2 feeds
+        QTimer.singleShot(6000, lambda: self._demo_add_feeds(2))
+    
+    def _demo_add_feeds(self, target_count):
+        """Helper method for demo."""
+        current_count = self.video_feed_manager.get_feed_count()
+        
+        if target_count > current_count:
+            # Add feeds
+            for i in range(current_count, target_count):
+                feed_names = ["Main Camera", "Depth View", "Mask View", "Tracking View", "Debug View", "Analysis View"]
+                name = feed_names[i] if i < len(feed_names) else f"Feed {i+1}"
+                self.add_video_feed(name, f"feed_{i}")
+        elif target_count < current_count:
+            # Remove feeds
+            feed_ids = self.video_feed_manager.get_feed_ids()
+            for i in range(target_count, current_count):
+                if i < len(feed_ids):
+                    self.remove_video_feed(feed_ids[i])
+        
+        print(f"Updated to {target_count} feeds")
+    
+    def get_latency_summary(self):
+        """
+        Get a summary of latency information for display.
+        
+        Returns:
+            str: Formatted latency summary
+        """
+        latencies = self.get_feed_latencies()
+        fps_data = self.get_feed_fps()
+        
+        if not latencies:
+            return "No active feeds"
+        
+        summary_lines = []
+        for feed_id, latency in latencies.items():
+            fps = fps_data.get(feed_id, 0.0)
+            summary_lines.append(f"{feed_id}: {latency:.1f}ms, {fps:.1f}fps")
+        
+        return " | ".join(summary_lines)
