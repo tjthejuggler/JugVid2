@@ -24,8 +24,7 @@ from juggling_tracker.ui.main_window import MainWindow
 from juggling_tracker.extensions.extension_manager import ExtensionManager
 from juggling_tracker.modules.ball_definer import BallDefiner
 from juggling_tracker.modules.ball_profile_manager import BallProfileManager
-# HIGH-PERFORMANCE IMU INTEGRATION (2025-08-18)
-from smart_imu_manager import WatchIMUManager  # Automatically uses high-performance system
+from watch_imu_manager import WatchIMUManager
 
 
 class WebcamFrameAcquisition:

@@ -71,12 +71,17 @@ def parse_args():
     Returns:
         argparse.Namespace: Parsed arguments
     """
-    parser = argparse.ArgumentParser(description='Juggling Tracker')
+    parser = argparse.ArgumentParser(description='Juggling Tracker with Real-time IMU Streaming')
     parser.add_argument('--config-dir', type=str, help='Directory to save configuration files')
     parser.add_argument('--no-realsense', action='store_true', help='Disable RealSense camera')
     parser.add_argument('--webcam', action='store_true', help='Use webcam instead of RealSense')
-    parser.add_argument('--simulation', action='store_true', help='Use simulation mode')
+    parser.add_argument('--simulation', action='store_true', help='Use video playback mode (replaces old simulation)')
+    parser.add_argument('--jugvid2cpp', action='store_true', help='Use JugVid2cpp for high-performance 3D ball tracking')
+    parser.add_argument('--video-path', type=str, help='Path to video file for playback mode')
     parser.add_argument('--camera-index', type=int, default=0, help='Index of the webcam to use')
+    parser.add_argument('--watch-ips', nargs='+', help='Space-separated IP addresses of TicWatches for IMU streaming')
+    parser.add_argument('--simulation-speed', type=float, default=1.0,
+                        help='Legacy. Speed of video playback is determined by video FPS and processing.')
     return parser.parse_args()
 
 def main():
@@ -87,25 +92,41 @@ def main():
     args = parse_args()
     
     # Check if we should use RealSense
-    use_realsense = not args.no_realsense and not args.webcam and not args.simulation
+    use_realsense = not args.no_realsense and not args.webcam and not args.simulation and not args.jugvid2cpp
     
     # If RealSense is requested but not available, show a message and exit
     if use_realsense and not realsense_available:
         print("\nERROR: RealSense camera is not available, but no alternative mode was specified.")
         print("\nPlease use one of the following options:")
         print("  --webcam         Use a webcam instead of RealSense")
-        print("  --simulation     Use simulation mode (no camera required)")
+        print("  --simulation     Use video playback mode (requires --video-path)")
+        print("  --jugvid2cpp     Use JugVid2cpp for high-performance 3D ball tracking")
         print("  --no-realsense   Disable RealSense and use fallback modes automatically")
-        print("\nExample:")
-        print("  python run_juggling_tracker.py --simulation")
-        print("  python run_juggling_tracker.py --webcam --camera-index 0")
+        print("\nIMU Streaming:")
+        print("  --watch-ips IP1 IP2   Enable real-time IMU streaming from watches")
+        print("\nExamples:")
+        print("  python run_juggling_tracker.py --webcam")
+        print("  python run_juggling_tracker.py --webcam --watch-ips 192.168.1.101 192.168.1.102")
+        print("  python run_juggling_tracker.py --simulation --video-path video.mp4")
+        print("  python run_juggling_tracker.py --jugvid2cpp --watch-ips 10.200.169.205")
         sys.exit(1)
     
     # Import the main module
-    from juggling_tracker.main import main as juggling_main
+    from juggling_tracker.main import JugglingTracker
     
-    # Run the application
-    juggling_main()
+    # Create and run the application with all arguments
+    app = JugglingTracker(
+        config_dir=args.config_dir,
+        use_realsense=use_realsense,
+        use_webcam=args.webcam,
+        use_simulation=args.simulation,
+        use_jugvid2cpp=args.jugvid2cpp,
+        camera_index=args.camera_index,
+        simulation_speed=args.simulation_speed,
+        video_path=args.video_path,
+        watch_ips=args.watch_ips
+    )
+    app.run()
 
 if __name__ == '__main__':
     main()

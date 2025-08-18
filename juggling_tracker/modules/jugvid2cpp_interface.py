@@ -278,6 +278,8 @@ class JugVid2cppInterface:
         
         for ball_data in ball_data_list:
             color_name = ball_data["color_name"]
+            # Assuming C++ provides a unique ID per ball. If not, we can generate one.
+            # For now, we'll use the profile_id as a stand-in for a unique tracker ID.
             x, y, z = ball_data["position_3d"]
             
             # Skip if color not in mapping

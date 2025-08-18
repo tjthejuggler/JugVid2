@@ -1960,26 +1960,7 @@ class MainWindow(QMainWindow):
             # Get processed IMU data from the main tracker (not directly from watch manager)
             latest_imu_data = getattr(self.app, 'latest_imu_data', {})
             
-            # Check if watch manager exists and has active connections
-            has_watch_manager = hasattr(self.app, 'watch_imu_manager') and self.app.watch_imu_manager
-            has_connection = False
-            
-            if has_watch_manager:
-                # Check if high-performance system is connected (even without data)
-                if hasattr(self.app.watch_imu_manager, 'high_perf_manager'):
-                    # High-performance system - check if streaming is active
-                    has_connection = getattr(self.app.watch_imu_manager.high_perf_manager, 'running', False)
-                elif hasattr(self.app.watch_imu_manager, 'controller'):
-                    # Legacy system - check if controller has connections
-                    has_connection = bool(getattr(self.app.watch_imu_manager.controller, 'watch_ports', {}))
-            
             if latest_imu_data:
-                # Enable Advanced IMU Monitor button when we have IMU data
-                if not self.open_imu_monitor_btn.isEnabled():
-                    self.open_imu_monitor_btn.setEnabled(True)
-                    self.imu_status_label.setText("Status: Connected (High-Performance)")
-                    self.imu_status_label.setStyleSheet("color: green; font-weight: bold;")
-                
                 # Simplified display - show only key information to prevent clutter
                 watch_count = len(latest_imu_data)
                 if watch_count == 1:
@@ -2009,28 +1990,17 @@ class MainWindow(QMainWindow):
                 
                 self.imu_data_display.setText(display_text)
                 self.imu_data_display.setStyleSheet("background-color: #e8f5e8; padding: 5px; border: 1px solid #4CAF50;")
-            elif has_connection:
-                # Enable Advanced IMU Monitor button when connected (even without data)
-                if not self.open_imu_monitor_btn.isEnabled():
-                    self.open_imu_monitor_btn.setEnabled(True)
-                    self.imu_status_label.setText("Status: Connected (High-Performance)")
-                    self.imu_status_label.setStyleSheet("color: green; font-weight: bold;")
-                
-                self.imu_data_display.setText("Connected - Waiting for sensor data... (Use Advanced Monitor for details)")
-                self.imu_data_display.setStyleSheet("background-color: #fff3cd; padding: 5px; border: 1px solid #ffc107;")
             else:
-                # Disable Advanced IMU Monitor button when no connection
-                if self.open_imu_monitor_btn.isEnabled():
-                    self.open_imu_monitor_btn.setEnabled(False)
-                
-                if has_watch_manager:
-                    self.imu_status_label.setText("Status: Not Connected")
-                    self.imu_status_label.setStyleSheet("color: red; font-weight: bold;")
-                    self.imu_data_display.setText("No IMU data - Connect watches to see live sensor data")
-                    self.imu_data_display.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc;")
+                # Check if watch manager exists and is connected
+                if hasattr(self.app, 'watch_imu_manager') and self.app.watch_imu_manager:
+                    # Check connection status
+                    if "Connected" in self.imu_status_label.text():
+                        self.imu_data_display.setText("Waiting for IMU data... (Use Advanced Monitor for details)")
+                        self.imu_data_display.setStyleSheet("background-color: #fff3cd; padding: 5px; border: 1px solid #ffc107;")
+                    else:
+                        self.imu_data_display.setText("No IMU data - Connect watches to see live sensor data")
+                        self.imu_data_display.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc;")
                 else:
-                    self.imu_status_label.setText("Status: Not Available")
-                    self.imu_status_label.setStyleSheet("color: red; font-weight: bold;")
                     self.imu_data_display.setText("Watch IMU Manager not available")
                     self.imu_data_display.setStyleSheet("background-color: #f8d7da; padding: 5px; border: 1px solid #dc3545;")
         except Exception as e:

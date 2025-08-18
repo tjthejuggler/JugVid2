@@ -3,4 +3,5 @@ opencv-python>=4.5.0
 #pyrealsense2>=2.50.0
 mediapipe>=0.8.10
 PyQt6>=6.4.0
-filterpy
+filterpy>=1.4.5
+websockets>=11.0.0
