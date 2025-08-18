@@ -4,11 +4,13 @@ A collection of computer vision applications using Intel RealSense depth cameras
 
 ## Projects
 
-### 1. Juggling Tracker
-A robust juggling ball tracking system using Intel RealSense depth cameras.
+### 1. Juggling Tracker ⭐ ENHANCED!
+A robust juggling ball tracking system using Intel RealSense depth cameras, now with high-performance JugVid2cpp integration.
 
 **Features:**
 - Real-time juggling ball tracking using color and depth data.
+- **JugVid2cpp Integration**: High-performance C++ 3D ball tracking at up to 90 FPS.
+- **Multiple Input Modes**: RealSense cameras, webcams, video playback, and JugVid2cpp.
 - Skeleton detection for hand position estimation.
 - Blob detection and filtering for ball identification.
 - Color calibration for balls.
@@ -21,11 +23,33 @@ A robust juggling ball tracking system using Intel RealSense depth cameras.
     - The application can play back standard video files (e.g., .mp4, .avi) as a simulated live feed. This is useful for testing tracking algorithms without a live camera.
     - To use, select "Recorded Feed (Video)" from the "Feed Source" panel and choose a video file. The video will loop automatically.
     - Note: Standard video files do not contain depth data, so depth-dependent features will be limited in this mode.
+- **JugVid2cpp 3D Tracking Mode**:
+    - Integration with the high-performance JugVid2cpp C++ ball tracker for superior 3D tracking performance.
+    - Provides direct 3D ball positions at up to 90 FPS without traditional computer vision pipeline overhead.
+    - Tracks pink, orange, green, and yellow balls using optimized color-based detection.
+    - To use, select "JugVid2cpp 3D Tracking" from the "Feed Source" panel or use `--jugvid2cpp` command line option.
+    - Requires JugVid2cpp to be built and available at `/home/twain/Projects/JugVid2cpp/build/bin/ball_tracker`.
+    - _(Added: 2025-08-16, Integration completed: 2025-08-16)_
 - **RealSense BAG File Recording**:
     - The application can record color and depth streams from a connected RealSense camera into a `.bag` file.
     - This allows capturing full sensor data for later analysis or playback (Note: Direct playback of `.bag` files with depth data within this application is a potential future enhancement).
     - To use, ensure "Live Feed (Camera)" is active with a RealSense camera. Use the "Start Recording" button in the "Recording" panel, choose a save location for the `.bag` file. Click "Stop Recording" to finalize the file.
     - _(Updated: 2025-05-31)_
+
+**JugVid2cpp Setup:**
+1. Build JugVid2cpp:
+   ```bash
+   cd /home/twain/Projects/JugVid2cpp
+   ./build.sh
+   ```
+2. Test the integration:
+   ```bash
+   python test_jugvid2cpp_integration.py
+   ```
+3. Run with JugVid2cpp:
+   ```bash
+   python -m juggling_tracker.main --jugvid2cpp
+   ```
 
 ### 2. Face Balance Timer ⭐ IMPROVED!
 An automatic timer for face balancing exercises using pose detection with advanced state management.
@@ -302,6 +326,15 @@ Or directly:
 python juggling_tracker/main.py [arguments]
 ```
 
+**JugVid2cpp Mode:**
+```bash
+# Run with high-performance JugVid2cpp integration
+python -m juggling_tracker.main --jugvid2cpp
+
+# Test the integration
+python test_jugvid2cpp_integration.py
+```
+
 ### Face Balance Timer
 Run the face balance timer using:
 ```bash
@@ -333,13 +366,14 @@ python3 test_stillness_recorder.py
 -   `--config-dir <path>`: Directory to save/load configuration files.
 -   `--no-realsense`: Disable RealSense camera (attempts webcam or other fallbacks).
 -   `--webcam`: Force use of a webcam.
+-   `--jugvid2cpp`: Use JugVid2cpp for high-performance 3D ball tracking.
 -   `--camera-index <index>`: Specify the webcam index (default: 0).
 -   `--simulation`: Enable video playback mode. Requires `--video-path`.
 -   `--video-path <path>`: Path to the video file to be used in playback mode.
 
 ### UI Controls:
 -   **Feed Source Panel**:
-    -   **Feed Mode**: Switch between "Live Feed (Camera)" and "Recorded Feed (Video)".
+    -   **Feed Mode**: Switch between "Live Feed (Camera)", "Recorded Feed (Video)", and "JugVid2cpp 3D Tracking".
     -   **Select Video File...**: Appears when "Recorded Feed" is selected; allows choosing a video for playback.
 -   **Recording Panel**:
     -   **Start Recording**: Appears when "Live Feed" with a RealSense camera is active; prompts for a `.bag` file location and starts recording.
@@ -351,6 +385,7 @@ python3 test_stillness_recorder.py
 
 ### Core Modules
 -   `frame_acquisition`: Handles camera input (RealSense, Webcam, Video File, BAG File Recording).
+-   `jugvid2cpp_interface`: Bridge module for JugVid2cpp C++ ball tracker integration.
 -   `color_only_frame_acquisition`: Simplified RealSense color-only stream acquisition.
 -   `depth_processor`: Processes depth data.
 -   `skeleton_detector`: Detects human skeletons and hand positions.

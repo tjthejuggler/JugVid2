@@ -174,7 +174,7 @@ class MainWindow(QMainWindow):
         self.feed_source_layout = QFormLayout() # Using QFormLayout for label-widget pairs
 
         self.feed_mode_combo = QComboBox()
-        self.feed_mode_combo.addItems(["Live Feed (Camera)", "Recorded Feed (Video)"])
+        self.feed_mode_combo.addItems(["Live Feed (Camera)", "Recorded Feed (Video)", "JugVid2cpp 3D Tracking"])
         self.feed_mode_combo.currentIndexChanged.connect(self.on_feed_mode_changed)
         self.feed_source_layout.addRow("Feed Mode:", self.feed_mode_combo)
 
@@ -1535,6 +1535,13 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("Switched to Recorded Feed. Select a video file.", 3000)
                 # Optionally, prompt to select a file immediately
                 # self.select_video_file()
+        elif index == 2: # JugVid2cpp 3D Tracking
+            self.current_feed_mode = "jugvid2cpp"
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("JugVid2cpp provides 3D ball positions directly")
+            if self.app and hasattr(self.app, 'switch_to_jugvid2cpp_mode'):
+                self.app.switch_to_jugvid2cpp_mode()
+            self.status_bar.showMessage("Switched to JugVid2cpp 3D Tracking mode.", 3000)
         self.update_recording_controls_state() # Update recording button states based on new mode
 
     def select_video_file(self):
@@ -1643,6 +1650,7 @@ class MainWindow(QMainWindow):
 
         # Recording is only possible if live RealSense is active AND we are in "Live Feed" mode UI-wise.
         # The self.current_feed_mode check ensures UI consistency.
+        # JugVid2cpp mode doesn't support recording since it's already processed data
         allow_recording_controls = (self.current_feed_mode == "live") and can_record
 
         if self.is_app_recording: # If app says it's recording
@@ -1687,6 +1695,11 @@ class MainWindow(QMainWindow):
                 self.video_path_label.setText(os.path.basename(self.current_video_path))
             else:
                 self.video_path_label.setText("No video selected")
+        elif app_fa_mode == 'jugvid2cpp': # JugVid2cpp 3D Tracking
+            self.current_feed_mode = "jugvid2cpp"
+            self.feed_mode_combo.setCurrentIndex(2) # "JugVid2cpp 3D Tracking"
+            self.select_video_button.setEnabled(False)
+            self.video_path_label.setText("JugVid2cpp provides 3D ball positions directly")
         elif app_fa_mode == 'live': # RealSense
             self.current_feed_mode = "live"
             self.feed_mode_combo.setCurrentIndex(0) # "Live Feed (Camera)"

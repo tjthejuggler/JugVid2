@@ -19,6 +19,7 @@ from juggling_tracker.modules.color_calibration import ColorCalibration
 from juggling_tracker.modules.ball_identifier import BallIdentifier
 from juggling_tracker.modules.multi_ball_tracker import MultiBallTracker
 from juggling_tracker.modules.simple_tracker import SimpleTracker
+from juggling_tracker.modules.jugvid2cpp_interface import JugVid2cppInterface
 from juggling_tracker.ui.main_window import MainWindow
 from juggling_tracker.extensions.extension_manager import ExtensionManager
 from juggling_tracker.modules.ball_definer import BallDefiner
@@ -158,7 +159,7 @@ class JugglingTracker:
     This class ties all the modules together and provides the main entry point for the application.
     """
     
-    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, camera_index=0, video_path=None, simulation_speed=2.0): # simulation_speed is legacy
+    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, use_jugvid2cpp=False, camera_index=0, video_path=None, simulation_speed=2.0): # simulation_speed is legacy
         """
         Initialize the JugglingTracker application.
         
@@ -167,6 +168,7 @@ class JugglingTracker:
             use_realsense (bool): Whether to use the RealSense camera (default: True)
             use_webcam (bool): Whether to use a webcam as fallback (default: False)
             use_simulation (bool): Whether to use video playback mode (replaces old simulation)
+            use_jugvid2cpp (bool): Whether to use JugVid2cpp for 3D ball tracking (default: False)
             camera_index (int): Index of the webcam to use (default: 0)
             video_path (str, optional): Path to video file for playback mode.
             simulation_speed (float): Legacy, no longer used directly for FrameAcquisition speed.
@@ -180,12 +182,14 @@ class JugglingTracker:
         self._initial_use_realsense = use_realsense
         self._initial_use_webcam = use_webcam
         self._initial_use_simulation = use_simulation # Though this directly sets current mode
+        self._initial_use_jugvid2cpp = use_jugvid2cpp # Store for JugVid2cpp mode
         self._initial_camera_index = camera_index   # Store for webcam mode
         self._initial_video_path = video_path       # Store for playback mode
 
         self.use_realsense = use_realsense
         self.use_webcam = use_webcam
         self.use_simulation = use_simulation # This now means video playback
+        self.use_jugvid2cpp = use_jugvid2cpp # JugVid2cpp 3D tracking mode
         self.camera_index = camera_index
         self.video_path = video_path
         
@@ -193,7 +197,10 @@ class JugglingTracker:
         default_width, default_height = 640, 480
 
         # Set the frame acquisition module based on the specified mode
-        if self.use_simulation: # Video Playback Mode
+        if self.use_jugvid2cpp: # JugVid2cpp 3D Tracking Mode
+            print("Using JugVid2cpp 3D tracking mode.")
+            self.frame_acquisition = JugVid2cppInterface()
+        elif self.use_simulation: # Video Playback Mode
             if self.video_path:
                 print(f"Using video playback mode with video: {self.video_path}")
                 self.frame_acquisition = FrameAcquisition(
@@ -332,7 +339,35 @@ class JugglingTracker:
             print("Failed to initialize primary camera/video mode.")
             original_intended_mode = self.frame_acquisition.mode
 
-            if original_intended_mode == 'playback': # Playback failed
+            if original_intended_mode == 'jugvid2cpp': # JugVid2cpp failed
+                print("JugVid2cpp initialization failed. Attempting fallback to live mode.")
+                # Attempt to fall back to default live mode (RealSense then Webcam)
+                self.use_jugvid2cpp = False
+                self.use_realsense = self._initial_use_realsense if not self._initial_use_webcam else True
+                self.use_webcam = self._initial_use_webcam if self.use_realsense else True
+                
+                if self.use_realsense:
+                    print("Falling back to RealSense mode.")
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live')
+                    if not self.frame_acquisition.initialize():
+                        print("RealSense fallback failed. Trying Webcam.")
+                        self.use_realsense = False; self.use_webcam = True
+                        self.frame_acquisition = WebcamFrameAcquisition(width=640, height=480, camera_index=self._initial_camera_index)
+                        if not self.frame_acquisition.initialize():
+                            print("FATAL: All fallback modes failed after JugVid2cpp failure.")
+                            return False
+                    else:
+                         self.use_webcam = False
+                elif self.use_webcam:
+                    print("Falling back to Webcam mode.")
+                    self.frame_acquisition = WebcamFrameAcquisition(width=640, height=480, camera_index=self._initial_camera_index)
+                    if not self.frame_acquisition.initialize():
+                        print("FATAL: Webcam fallback failed.")
+                        return False
+                else:
+                    print("FATAL: JugVid2cpp failed and no live mode to fall back to.")
+                    return False
+            elif original_intended_mode == 'playback': # Playback failed
                 print(f"Video playback failed for: {self.video_path}. Attempting live mode.")
                 # Attempt to fall back to default live mode (RealSense then Webcam)
                 self.use_simulation = False
@@ -342,11 +377,11 @@ class JugglingTracker:
                 
                 if self.use_realsense:
                     print("Falling back to RealSense mode.")
-                    self.frame_acquisition = FrameAcquisition(width=self._initial_camera_width, height=self._initial_camera_height, mode='live')
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live')
                     if not self.frame_acquisition.initialize():
                         print("RealSense fallback failed. Trying Webcam.")
                         self.use_realsense = False; self.use_webcam = True
-                        self.frame_acquisition = WebcamFrameAcquisition(width=self._initial_camera_width, height=self._initial_camera_height, camera_index=self._initial_camera_index)
+                        self.frame_acquisition = WebcamFrameAcquisition(width=640, height=480, camera_index=self._initial_camera_index)
                         if not self.frame_acquisition.initialize():
                             print("FATAL: All fallback modes failed after playback failure.")
                             return False
@@ -354,7 +389,7 @@ class JugglingTracker:
                          self.use_webcam = False # Ensure webcam flag is false
                 elif self.use_webcam: # Only webcam was an option initially or RealSense failed
                     print("Falling back to Webcam mode (or primary was webcam).")
-                    self.frame_acquisition = WebcamFrameAcquisition(width=self._initial_camera_width, height=self._initial_camera_height, camera_index=self._initial_camera_index)
+                    self.frame_acquisition = WebcamFrameAcquisition(width=640, height=480, camera_index=self._initial_camera_index)
                     if not self.frame_acquisition.initialize():
                         print("FATAL: Webcam fallback failed.")
                         return False
@@ -381,18 +416,26 @@ class JugglingTracker:
                  return False
         
         # Update current mode flags based on the successfully initialized frame_acquisition
-        if isinstance(self.frame_acquisition, FrameAcquisition) and self.frame_acquisition.mode == 'live':
+        if isinstance(self.frame_acquisition, JugVid2cppInterface):
+            self.use_realsense = False
+            self.use_webcam = False
+            self.use_simulation = False
+            self.use_jugvid2cpp = True
+        elif isinstance(self.frame_acquisition, FrameAcquisition) and self.frame_acquisition.mode == 'live':
             self.use_realsense = True
             self.use_webcam = False
             self.use_simulation = False
+            self.use_jugvid2cpp = False
         elif isinstance(self.frame_acquisition, WebcamFrameAcquisition):
             self.use_realsense = False
             self.use_webcam = True
             self.use_simulation = False
+            self.use_jugvid2cpp = False
         elif isinstance(self.frame_acquisition, FrameAcquisition) and self.frame_acquisition.mode == 'playback':
             self.use_realsense = False
             self.use_webcam = False
             self.use_simulation = True # This means video playback
+            self.use_jugvid2cpp = False
 
         print(f"JugglingTracker initialized. Active mode: {self.frame_acquisition.mode}")
         print(f"[DEBUG Roo] JugglingTracker.initialize: Final frame_acquisition type: {type(self.frame_acquisition)}, mode: {self.frame_acquisition.mode if hasattr(self.frame_acquisition, 'mode') else 'N/A'}") # Roo log
@@ -455,9 +498,42 @@ class JugglingTracker:
             print("[Tracker Loop] Depth image is NONE")
         # ------------ TEMPORARY DEBUG END ------------
 
-        if depth_image is None or color_image is None:
+        # Get current mode from the frame acquisition
+        current_mode = self.frame_acquisition.mode if hasattr(self.frame_acquisition, 'mode') else 'unknown'
+        
+        # Special handling for JugVid2cpp mode - it may not have camera frames but should still process
+        if current_mode != 'jugvid2cpp' and (depth_image is None or color_image is None):
             print("Warning: Invalid frames received from frame_acquisition, skipping frame processing.") # Enhanced message
             return
+        
+        # For JugVid2cpp mode, create status image if no camera feed
+        if current_mode == 'jugvid2cpp' and color_image is None:
+            color_image = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(color_image, "JugVid2cpp 3D Tracking Active", (50, 200),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            cv2.putText(color_image, "Camera feed unavailable", (50, 250),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
+            # Show JugVid2cpp status
+            if isinstance(self.frame_acquisition, JugVid2cppInterface):
+                identified_balls = self.frame_acquisition.get_identified_balls()
+                if identified_balls:
+                    cv2.putText(color_image, f"Tracking {len(identified_balls)} balls", (50, 300),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    y_offset = 330
+                    for ball in identified_balls:
+                        if 'original_3d' in ball:
+                            x, y, z = ball['original_3d']
+                            text = f"{ball['name']}: X={x:.2f}, Y={y:.2f}, Z={z:.2f}"
+                            cv2.putText(color_image, text, (50, y_offset),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                            y_offset += 25
+                else:
+                    cv2.putText(color_image, "No balls detected", (50, 300),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        
+        if current_mode == 'jugvid2cpp' and depth_image is None:
+            depth_image = np.zeros((480, 640), dtype=np.uint16)
         
         # Store frames for ball definition
         self.last_color_image_for_def = color_image.copy()
@@ -477,79 +553,114 @@ class JugglingTracker:
             print("WARN: self.frame_acquisition not available for intrinsics/depth_scale.")
         
         # Determine current operating mode from frame_acquisition object
-        # self.frame_acquisition.mode can be 'live' (RealSense), 'playback', or 'live_webcam'
+        # self.frame_acquisition.mode can be 'live' (RealSense), 'playback', 'live_webcam', or 'jugvid2cpp'
         current_mode = self.frame_acquisition.mode
         
-        # Unified processing path for all modes.
-        # Depth-related data (depth_frame, depth_image, depth_in_meters, intrinsics)
-        # might be None or default values if not available (e.g., in playback or webcam mode).
-        # Downstream modules must handle this gracefully.
+        # Handle JugVid2cpp mode differently - it provides 3D positions directly but also has camera feed
+        if current_mode == 'jugvid2cpp':
+            # JugVid2cpp provides 3D ball positions directly, use those instead of normal pipeline
+            if isinstance(self.frame_acquisition, JugVid2cppInterface):
+                # Get 3D ball positions from JugVid2cpp
+                identified_balls = self.frame_acquisition.get_identified_balls()
+                
+                # Create dummy values for compatibility with existing pipeline
+                depth_in_meters = None
+                proximity_mask = np.ones((color_image.shape[0] if color_image is not None else 480,
+                                        color_image.shape[1] if color_image is not None else 640), dtype=np.uint8) * 255
+                hand_positions = ((0, 0), (0, 0))  # Dummy hand positions since JugVid2cpp handles this
+                hand_mask = np.zeros((color_image.shape[0] if color_image is not None else 480,
+                                    color_image.shape[1] if color_image is not None else 640), dtype=np.uint8)
+                combined_mask = proximity_mask
+                simple_tracking_result = {'object_count': len(identified_balls), 'total_area': 0, 'average_position': None, 'individual_positions': []}
+                blobs = []
+                filtered_blobs = []
+                
+                current_time = time.time()
+                current_intrinsics = self.frame_acquisition.get_intrinsics()
+                
+                # Update ball trackers with JugVid2cpp data
+                if hasattr(self, 'ball_tracker') and self.ball_tracker is not None:
+                    tracked_balls_display_info = self.ball_tracker.update_trackers(
+                        identified_balls,
+                        current_intrinsics,
+                        current_time=current_time
+                    )
+                else:
+                    tracked_balls_display_info = []
+            else:
+                print("Error: JugVid2cpp mode but frame_acquisition is not JugVid2cppInterface")
+                return
+        else:
+            # Normal processing path for all other modes
+            # Depth-related data (depth_frame, depth_image, depth_in_meters, intrinsics)
+            # might be None or default values if not available (e.g., in playback or webcam mode).
+            # Downstream modules must handle this gracefully.
 
-        depth_in_meters = None
-        proximity_mask = None # Initialize to None
-        # Get depth_scale from frame_acquisition; it will be None if not applicable (e.g. playback)
-        current_depth_scale = self.frame_acquisition.get_depth_scale()
+            depth_in_meters = None
+            proximity_mask = None # Initialize to None
+            # Get depth_scale from frame_acquisition; it will be None if not applicable (e.g. playback)
+            current_depth_scale = self.frame_acquisition.get_depth_scale()
 
-        if current_mode == 'live' and depth_frame is not None and depth_image is not None and current_depth_scale is not None:
-            # This is RealSense with valid depth data
-            depth_in_meters = self.depth_processor.process_depth_frame(depth_frame, depth_image, current_depth_scale)
+            if current_mode == 'live' and depth_frame is not None and depth_image is not None and current_depth_scale is not None:
+                # This is RealSense with valid depth data
+                depth_in_meters = self.depth_processor.process_depth_frame(depth_frame, depth_image, current_depth_scale)
+                if depth_in_meters is not None:
+                    proximity_mask = self.depth_processor.create_proximity_mask(depth_in_meters)
+                    proximity_mask = self.depth_processor.cleanup_mask(proximity_mask)
+            
+            # If proximity_mask is still None (e.g. playback, webcam, or failed depth processing),
+            # create a default "pass-through" mask.
+            if proximity_mask is None and color_image is not None:
+                proximity_mask = np.ones((color_image.shape[0], color_image.shape[1]), dtype=np.uint8) * 255
+            elif color_image is None: # Should not happen if frame acquisition is working
+                print("Error: color_image is None in process_frame, cannot create default proximity_mask.")
+                return
+
+            # Skeleton detection (works on color_image, so applicable to all modes)
+            pose_landmarks = self.skeleton_detector.detect_skeleton(color_image)
+            hand_positions = self.skeleton_detector.get_hand_positions(pose_landmarks, color_image.shape)
+            hand_mask = self.skeleton_detector.create_hand_mask(hand_positions, color_image.shape)
+            
+            # Combine proximity mask and hand mask
+            combined_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
+                
+            # Simple tracking on the combined mask
+            min_size, max_size = self.depth_processor.get_object_size_range()
+            simple_tracking_result = self.simple_tracker.track_objects(combined_mask, min_size, max_size)
+            
+            # Blob detection in the combined mask
+            blobs = self.blob_detector.detect_blobs(combined_mask)
+            
+            # Filter blobs by depth variance (only if depth_in_meters is available)
             if depth_in_meters is not None:
-                proximity_mask = self.depth_processor.create_proximity_mask(depth_in_meters)
-                proximity_mask = self.depth_processor.cleanup_mask(proximity_mask)
-        
-        # If proximity_mask is still None (e.g. playback, webcam, or failed depth processing),
-        # create a default "pass-through" mask.
-        if proximity_mask is None and color_image is not None:
-            proximity_mask = np.ones((color_image.shape[0], color_image.shape[1]), dtype=np.uint8) * 255
-        elif color_image is None: # Should not happen if frame acquisition is working
-            print("Error: color_image is None in process_frame, cannot create default proximity_mask.")
-            return
-
-        # Skeleton detection (works on color_image, so applicable to all modes)
-        pose_landmarks = self.skeleton_detector.detect_skeleton(color_image)
-        hand_positions = self.skeleton_detector.get_hand_positions(pose_landmarks, color_image.shape)
-        hand_mask = self.skeleton_detector.create_hand_mask(hand_positions, color_image.shape)
-        
-        # Combine proximity mask and hand mask
-        combined_mask = cv2.bitwise_and(proximity_mask, cv2.bitwise_not(hand_mask))
+                filtered_blobs = self.blob_detector.filter_blobs_by_depth_variance(blobs, depth_in_meters)
+            else:
+                filtered_blobs = blobs # No depth variance filtering if depth_in_meters is None
+                
+            current_time = time.time()
+            # Get intrinsics; will be None if not available (playback, webcam)
+            current_intrinsics = self.frame_acquisition.get_intrinsics()
             
-        # Simple tracking on the combined mask
-        min_size, max_size = self.depth_processor.get_object_size_range()
-        simple_tracking_result = self.simple_tracker.track_objects(combined_mask, min_size, max_size)
-        
-        # Blob detection in the combined mask
-        blobs = self.blob_detector.detect_blobs(combined_mask)
-        
-        # Filter blobs by depth variance (only if depth_in_meters is available)
-        if depth_in_meters is not None:
-            filtered_blobs = self.blob_detector.filter_blobs_by_depth_variance(blobs, depth_in_meters)
-        else:
-            filtered_blobs = blobs # No depth variance filtering if depth_in_meters is None
+            # Identify balls
+            if hasattr(self, 'ball_identifier') and self.ball_identifier is not None:
+                identified_balls = self.ball_identifier.identify_balls(
+                    filtered_blobs,
+                    color_image,
+                    depth_in_meters,    # Can be None
+                    current_intrinsics  # Can be None
+                )
+            else:
+                identified_balls = []
             
-        current_time = time.time()
-        # Get intrinsics; will be None if not available (playback, webcam)
-        current_intrinsics = self.frame_acquisition.get_intrinsics()
-        
-        # Identify balls
-        if hasattr(self, 'ball_identifier') and self.ball_identifier is not None:
-            identified_balls = self.ball_identifier.identify_balls(
-                filtered_blobs,
-                color_image,
-                depth_in_meters,    # Can be None
-                current_intrinsics  # Can be None
-            )
-        else:
-            identified_balls = []
-        
-        # Update ball trackers
-        if hasattr(self, 'ball_tracker') and self.ball_tracker is not None:
-            tracked_balls_display_info = self.ball_tracker.update_trackers(
-                identified_balls,
-                current_intrinsics, # Can be None
-                current_time=current_time
-            )
-        else:
-            tracked_balls_display_info = []
+            # Update ball trackers
+            if hasattr(self, 'ball_tracker') and self.ball_tracker is not None:
+                tracked_balls_display_info = self.ball_tracker.update_trackers(
+                    identified_balls,
+                    current_intrinsics, # Can be None
+                    current_time=current_time
+                )
+            else:
+                tracked_balls_display_info = []
             
         ball_velocities = self.ball_tracker.get_ball_velocities() if hasattr(self, 'ball_tracker') else []
         
@@ -584,7 +695,9 @@ class JugglingTracker:
 
         # Determine mode string for debug info
         mode_str = "Unknown"
-        if current_mode == 'live':
+        if current_mode == 'jugvid2cpp':
+            mode_str = 'JugVid2cpp 3D Tracking'
+        elif current_mode == 'live':
             mode_str = 'RealSense'
         elif current_mode == 'playback':
             mode_str = f'Playback ({os.path.basename(self.video_path or "No File")})'
@@ -877,6 +990,44 @@ class JugglingTracker:
         print(f"[DEBUG Roo] JugglingTracker.switch_to_live_mode: Successfully switched. FA mode: {self.frame_acquisition.mode}, type: {type(self.frame_acquisition)}") # Roo log
         return True
 
+    def switch_to_jugvid2cpp_mode(self):
+        """Switch the frame acquisition to JugVid2cpp 3D tracking mode."""
+        print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: Called") # Roo log
+        print("Attempting to switch to JugVid2cpp 3D tracking mode.")
+        if self.frame_timer:
+            self.frame_timer.stop()
+
+        if self.frame_acquisition:
+            self.frame_acquisition.stop()
+
+        self.use_simulation = False
+        self.use_realsense = False
+        self.use_webcam = False
+        self.use_jugvid2cpp = True
+        self.video_path = None
+        
+        self.frame_acquisition = JugVid2cppInterface()
+        jugvid2cpp_init_success = self.frame_acquisition.initialize()
+        print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: JugVid2cpp initialize() result: {jugvid2cpp_init_success}") # Roo log
+        
+        if not jugvid2cpp_init_success:
+            print("Failed to initialize JugVid2cpp. Reverting to live mode if possible.")
+            print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: JugVid2cpp init failed, attempting fallback to live mode.") # Roo log
+            # Attempt to revert to a default live mode
+            self.main_window.feed_mode_combo.setCurrentIndex(0) # Visually switch back UI
+            self.switch_to_live_mode(fallback=True) # Internal switch
+            if hasattr(self.main_window, 'statusBar'):
+                self.main_window.statusBar().showMessage("Error: Could not start JugVid2cpp. Reverted to live.", 5000)
+            return False
+        
+        self.frame_count = 0
+        self.start_time = time.time()
+        if self.frame_timer:
+            self.frame_timer.start(self.frame_timer_interval)
+        print("Switched to JugVid2cpp 3D tracking mode.")
+        print(f"[DEBUG Roo] JugglingTracker.switch_to_jugvid2cpp_mode: Successfully switched. FA mode: {self.frame_acquisition.mode}, type: {type(self.frame_acquisition)}") # Roo log
+        return True
+
     @property
     def is_realsense_live_active(self):
         """Checks if the current frame_acquisition is RealSense in live mode."""
@@ -1017,6 +1168,7 @@ def parse_args():
     parser.add_argument('--no-realsense', action='store_true', help='Disable RealSense camera')
     parser.add_argument('--webcam', action='store_true', help='Use webcam instead of RealSense')
     parser.add_argument('--simulation', action='store_true', help='Use video playback mode (replaces old simulation)')
+    parser.add_argument('--jugvid2cpp', action='store_true', help='Use JugVid2cpp for high-performance 3D ball tracking')
     parser.add_argument('--video-path', type=str, help='Path to video file for playback mode')
     parser.add_argument('--camera-index', type=int, default=0, help='Index of the webcam to use')
     # --simulation-speed is now legacy, but kept for arg parsing compatibility if scripts use it.
@@ -1035,9 +1187,10 @@ def main():
     # Create and run the application
     app = JugglingTracker(
         config_dir=args.config_dir,
-        use_realsense=not args.no_realsense and not args.webcam and not args.simulation,
+        use_realsense=not args.no_realsense and not args.webcam and not args.simulation and not args.jugvid2cpp,
         use_webcam=args.webcam,
         use_simulation=args.simulation,
+        use_jugvid2cpp=args.jugvid2cpp,
         camera_index=args.camera_index,
         simulation_speed=args.simulation_speed, # Pass along, though its direct effect is diminished
         video_path=args.video_path
