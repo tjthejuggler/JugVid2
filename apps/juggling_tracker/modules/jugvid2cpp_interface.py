@@ -5,6 +5,7 @@ import cv2
 import base64
 import threading
 import queue
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 class JugVid2cppInterface:
@@ -150,11 +151,17 @@ class JugVid2cppInterface:
                         # Parse tracking data
                         ball_data = self._parse_tracking_data(track_part)
                         
+                        # Add timestamp to each ball
+                        current_timestamp = time.time()
+                        for ball in ball_data:
+                            ball['timestamp'] = current_timestamp
+                            ball['timestamp_str'] = datetime.fromtimestamp(current_timestamp).strftime("%H:%M:%S.%f")[:-3]
+                        
                         # Put frame data in queue (non-blocking)
                         frame_data = {
                             'video_frame': video_frame,
                             'ball_data': ball_data,
-                            'timestamp': time.time()
+                            'timestamp': current_timestamp
                         }
                         
                         try:
@@ -304,7 +311,9 @@ class JugVid2cppInterface:
                 "depth_m": z,  # Depth in meters
                 "color_bgr": (0, 255, 0),  # Default color (green)
                 "contour": None,  # No contour available
-                "original_3d": (x, y, z)  # Store original 3D coordinates
+                "original_3d": (x, y, z),  # Store original 3D coordinates
+                "timestamp": ball_data.get('timestamp', time.time()),  # Add timestamp
+                "timestamp_str": ball_data.get('timestamp_str', datetime.now().strftime("%H:%M:%S.%f")[:-3])  # Human readable timestamp
             }
             
             identified_balls.append(identified_ball)
@@ -347,8 +356,29 @@ class JugVid2cppInterface:
             "error_message": self.error_message,
             "consecutive_errors": self.consecutive_errors,
             "queue_size": self.frame_queue.qsize(),
-            "last_frame_ball_count": len(self.last_frame_data)
+            "last_frame_ball_count": len(self.last_frame_data),
+            "last_frame_timestamp": self.last_frame_data[0].get('timestamp', 0) if self.last_frame_data else 0
         }
+    
+    def print_timestamped_balls(self, identified_balls: List[Dict]) -> None:
+        """Print ball tracking data with timestamps to console."""
+        if not identified_balls:
+            return
+            
+        current_time = time.time()
+        timestamp_str = datetime.fromtimestamp(current_time).strftime("%H:%M:%S.%f")[:-3]
+        
+        print(f"[{timestamp_str}] 🏀 {len(identified_balls)} balls detected:")
+        for i, ball in enumerate(identified_balls):
+            profile_id = ball.get('profile_id', 'unknown')
+            position_2d = ball.get('position', (0, 0))
+            depth_m = ball.get('depth_m', 0.0)
+            original_3d = ball.get('original_3d', (0, 0, 0))
+            
+            print(f"  └─ Ball {i+1}: {profile_id}")
+            print(f"     📍 2D: ({position_2d[0]}, {position_2d[1]}) px")
+            print(f"     📏 3D: ({original_3d[0]:.3f}, {original_3d[1]:.3f}, {original_3d[2]:.3f}) m")
+            print(f"     🎯 Depth: {depth_m:.3f} m")
     
     def get_error_output(self) -> str:
         """Get any error output from the JugVid2cpp process."""
