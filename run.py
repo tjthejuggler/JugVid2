@@ -55,7 +55,9 @@ def main():
     elif command in command_map:
         launcher_cmd = command_map[command]
         if launcher_cmd:
-            subprocess.run([sys.executable, 'launcher.py', launcher_cmd])
+            # Pass through any additional arguments
+            additional_args = sys.argv[2:] if len(sys.argv) > 2 else []
+            subprocess.run([sys.executable, 'launcher.py', launcher_cmd] + additional_args)
         else:
             subprocess.run([sys.executable, 'launcher.py'])
     else:

@@ -322,7 +322,7 @@ class JugVid2Launcher:
             else:
                 print("❌ Invalid choice. Please try again.")
 
-    def run_direct(self, app_name):
+    def run_direct(self, app_name, extra_args=None):
         """Run application directly by name."""
         # Map common names to app keys
         name_mapping = {
@@ -347,6 +347,11 @@ class JugVid2Launcher:
                     self.check_dependencies()
                 else:
                     self.show_system_info()
+            elif app_key == '1' and extra_args:  # Juggling Tracker with extra args
+                app = self.applications[app_key]
+                script_path = self.project_root / app['script']
+                args = [sys.executable, str(script_path)] + extra_args
+                subprocess.run(args)
             else:
                 self.run_application(app_key)
         else:
@@ -358,13 +363,14 @@ def main():
     parser.add_argument('app', nargs='?', help='Application to run directly')
     parser.add_argument('--list', action='store_true', help='List all available applications')
     
-    args = parser.parse_args()
+    # Parse known args to allow passing through unknown args to applications
+    args, unknown_args = parser.parse_known_args()
     launcher = JugVid2Launcher()
     
     if args.list:
         launcher.show_main_menu()
     elif args.app:
-        launcher.run_direct(args.app)
+        launcher.run_direct(args.app, unknown_args if unknown_args else None)
     else:
         launcher.run_interactive()
 

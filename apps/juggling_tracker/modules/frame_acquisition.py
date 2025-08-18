@@ -13,7 +13,7 @@ class FrameAcquisition:
     - Providing access to camera intrinsics for 3D calculations
     """
     
-    def __init__(self, width=640, height=480, fps=30, mode='live', video_path=None):
+    def __init__(self, width=640, height=480, fps=30, mode='live', video_path=None, depth_only=False):
         """
         Initialize the FrameAcquisition module.
         
@@ -23,12 +23,14 @@ class FrameAcquisition:
             fps (int): Frames per second for camera configuration.
             mode (str): 'live' for RealSense camera, 'playback' for video file.
             video_path (str, optional): Path to the video file if mode is 'playback'.
+            depth_only (bool): If True, only enable depth stream (for cable compatibility).
         """
         self.width = width
         self.height = height
         self.fps = fps  # Target FPS for camera, video FPS is intrinsic to file
         self.mode = mode
         self.video_path = video_path
+        self.depth_only = depth_only
         
         self.pipeline = None
         self.align = None
@@ -73,7 +75,11 @@ class FrameAcquisition:
                 
                 if not is_playback_from_file_config: # Don't re-enable if playing from file
                     config_to_use.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
-                    config_to_use.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
+                    if not self.depth_only:
+                        config_to_use.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
+                        print("[DEBUG Roo FA] _initialize_live_stream: Enabled both depth and color streams.")
+                    else:
+                        print("[DEBUG Roo FA] _initialize_live_stream: Enabled depth-only stream for cable compatibility.")
 
             print("[DEBUG Roo FA] _initialize_live_stream: Starting pipeline...") # Roo log
             profile = self.pipeline.start(config_to_use)
@@ -84,16 +90,24 @@ class FrameAcquisition:
             print(f"Live Mode: Depth Scale is: {self.depth_scale:.3f} meters")
             print(f"[DEBUG Roo FA] _initialize_live_stream: Depth scale set to {self.depth_scale}") # Roo log
             
-            self.align = rs.align(rs.stream.color)
-            print("[DEBUG Roo FA] _initialize_live_stream: Align object created.") # Roo log
-            
-            color_profile = profile.get_stream(rs.stream.color) # Ensure it's color stream for intrinsics
-            if not color_profile: # Try depth if color not found (e.g. bag file only has depth)
-                 depth_stream_profile = profile.get_stream(rs.stream.depth)
-                 if depth_stream_profile:
-                      self.intrinsics = depth_stream_profile.as_video_stream_profile().get_intrinsics()
+            if not self.depth_only:
+                self.align = rs.align(rs.stream.color)
+                print("[DEBUG Roo FA] _initialize_live_stream: Align object created.") # Roo log
+                
+                color_profile = profile.get_stream(rs.stream.color) # Ensure it's color stream for intrinsics
+                if not color_profile: # Try depth if color not found (e.g. bag file only has depth)
+                     depth_stream_profile = profile.get_stream(rs.stream.depth)
+                     if depth_stream_profile:
+                          self.intrinsics = depth_stream_profile.as_video_stream_profile().get_intrinsics()
+                else:
+                     self.intrinsics = color_profile.as_video_stream_profile().get_intrinsics()
             else:
-                 self.intrinsics = color_profile.as_video_stream_profile().get_intrinsics()
+                # In depth-only mode, use depth stream for intrinsics and no alignment
+                self.align = None
+                depth_stream_profile = profile.get_stream(rs.stream.depth)
+                if depth_stream_profile:
+                    self.intrinsics = depth_stream_profile.as_video_stream_profile().get_intrinsics()
+                print("[DEBUG Roo FA] _initialize_live_stream: Depth-only mode, no alignment needed.") # Roo log
 
             print("[DEBUG Roo FA] _initialize_live_stream: Initialization successful.") # Roo log
             return True
@@ -162,21 +176,35 @@ class FrameAcquisition:
                 frames = self.pipeline.wait_for_frames(5000) # Keep timeout explicit
                 # print("[DEBUG Roo FA] get_frames (live): wait_for_frames() returned.") # Roo log
                 
-                aligned_frames = self.align.process(frames)
-                # print("[DEBUG Roo FA] get_frames (live): Frames aligned.") # Roo log
-                
-                depth_frame = aligned_frames.get_depth_frame()
-                color_frame = aligned_frames.get_color_frame()
-                
-                if not depth_frame or not color_frame:
-                    print("[DEBUG Roo FA] get_frames (live): Depth or Color frame is None after alignment.") # Roo log
-                    return None, None, None, None
-                
-                depth_image = np.asanyarray(depth_frame.get_data())
-                color_image = np.asanyarray(color_frame.get_data())
-                # print("[DEBUG Roo FA] get_frames (live): Frame data converted to numpy arrays.") # Roo log
-                
-                return depth_frame, color_frame, depth_image, color_image
+                if self.depth_only:
+                    # Depth-only mode: no alignment needed, no color frame
+                    depth_frame = frames.get_depth_frame()
+                    if not depth_frame:
+                        print("[DEBUG Roo FA] get_frames (live): Depth frame is None in depth-only mode.") # Roo log
+                        return None, None, None, None
+                    
+                    depth_image = np.asanyarray(depth_frame.get_data())
+                    # Create a grayscale "color" image from depth for visualization
+                    depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+                    
+                    return depth_frame, None, depth_image, depth_colormap
+                else:
+                    # Normal mode: both depth and color with alignment
+                    aligned_frames = self.align.process(frames)
+                    # print("[DEBUG Roo FA] get_frames (live): Frames aligned.") # Roo log
+                    
+                    depth_frame = aligned_frames.get_depth_frame()
+                    color_frame = aligned_frames.get_color_frame()
+                    
+                    if not depth_frame or not color_frame:
+                        print("[DEBUG Roo FA] get_frames (live): Depth or Color frame is None after alignment.") # Roo log
+                        return None, None, None, None
+                    
+                    depth_image = np.asanyarray(depth_frame.get_data())
+                    color_image = np.asanyarray(color_frame.get_data())
+                    # print("[DEBUG Roo FA] get_frames (live): Frame data converted to numpy arrays.") # Roo log
+                    
+                    return depth_frame, color_frame, depth_image, color_image
             except RuntimeError as e: # Catch specific RealSense errors
                 print(f"[DEBUG Roo FA] get_frames (live): RuntimeError: {e}") # Roo log
                 print(f"Error getting live frames: {e}")
@@ -259,7 +287,8 @@ class FrameAcquisition:
         record_config = rs.config()
         # Important: Configure the streams BEFORE enabling record to file.
         record_config.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
-        record_config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
+        if not self.depth_only:
+            record_config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
         record_config.enable_record_to_file(filepath)
         
         if self._initialize_live_stream(recording_config=record_config):

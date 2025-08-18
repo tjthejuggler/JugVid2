@@ -23,8 +23,13 @@ if os.path.exists(librealsense_path):
     # Also add to sys.path for the current process
     sys.path.insert(0, librealsense_path)
 
-# Add the current directory to the path so we can import the juggling_tracker package
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add the project root to the path so we can import modules correctly
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
+
+# Add the apps directory to the path
+apps_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, apps_dir)
 
 # Check if pyrealsense2 is available
 realsense_available = False
@@ -75,6 +80,7 @@ def parse_args():
     parser.add_argument('--config-dir', type=str, help='Directory to save configuration files')
     parser.add_argument('--no-realsense', action='store_true', help='Disable RealSense camera')
     parser.add_argument('--webcam', action='store_true', help='Use webcam instead of RealSense')
+    parser.add_argument('--depth-only', action='store_true', help='Use RealSense in depth-only mode (for cable compatibility)')
     parser.add_argument('--simulation', action='store_true', help='Use video playback mode (replaces old simulation)')
     parser.add_argument('--jugvid2cpp', action='store_true', help='Use JugVid2cpp for high-performance 3D ball tracking')
     parser.add_argument('--video-path', type=str, help='Path to video file for playback mode')
@@ -94,6 +100,11 @@ def main():
     # Check if we should use RealSense
     use_realsense = not args.no_realsense and not args.webcam and not args.simulation and not args.jugvid2cpp
     
+    # Depth-only mode is a variant of RealSense mode
+    if args.depth_only and not use_realsense:
+        print("Warning: --depth-only flag requires RealSense mode. Enabling RealSense.")
+        use_realsense = True
+    
     # If RealSense is requested but not available, show a message and exit
     if use_realsense and not realsense_available:
         print("\nERROR: RealSense camera is not available, but no alternative mode was specified.")
@@ -112,7 +123,7 @@ def main():
         sys.exit(1)
     
     # Import the main module
-    from juggling_tracker.main import JugglingTracker
+    from main import JugglingTracker
     
     # Create and run the application with all arguments
     app = JugglingTracker(
@@ -124,7 +135,8 @@ def main():
         camera_index=args.camera_index,
         simulation_speed=args.simulation_speed,
         video_path=args.video_path,
-        watch_ips=args.watch_ips
+        watch_ips=args.watch_ips,
+        depth_only=args.depth_only
     )
     app.run()
 

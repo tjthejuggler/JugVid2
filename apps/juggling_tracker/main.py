@@ -25,7 +25,7 @@ from juggling_tracker.extensions.extension_manager import ExtensionManager
 from juggling_tracker.modules.ball_definer import BallDefiner
 from juggling_tracker.modules.ball_profile_manager import BallProfileManager
 # HIGH-PERFORMANCE IMU INTEGRATION (2025-08-18)
-from smart_imu_manager import WatchIMUManager  # Automatically uses high-performance system
+from core.imu.smart_imu_manager import WatchIMUManager  # Automatically uses high-performance system
 
 
 class WebcamFrameAcquisition:
@@ -161,7 +161,7 @@ class JugglingTracker:
     This class ties all the modules together and provides the main entry point for the application.
     """
     
-    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, use_jugvid2cpp=False, camera_index=0, video_path=None, simulation_speed=2.0, watch_ips=None): # simulation_speed is legacy
+    def __init__(self, config_dir=None, use_realsense=True, use_webcam=False, use_simulation=False, use_jugvid2cpp=False, camera_index=0, video_path=None, simulation_speed=2.0, watch_ips=None, depth_only=False): # simulation_speed is legacy
         """
         Initialize the JugglingTracker application.
         
@@ -175,6 +175,7 @@ class JugglingTracker:
             video_path (str, optional): Path to video file for playback mode.
             simulation_speed (float): Legacy, no longer used directly for FrameAcquisition speed.
             watch_ips (list, optional): List of TicWatch IP addresses for IMU streaming.
+            depth_only (bool): If True, use RealSense in depth-only mode for cable compatibility.
         """
         # Set up configuration directory
         self.config_dir = config_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config')
@@ -196,6 +197,7 @@ class JugglingTracker:
         self.watch_ips = watch_ips or []
         self.camera_index = camera_index
         self.video_path = video_path
+        self.depth_only = depth_only
         
         # Default frame dimensions - can be overridden by specific camera modes
         default_width, default_height = 640, 480
@@ -217,7 +219,7 @@ class JugglingTracker:
                 print("Error: Video playback mode selected but no --video-path provided.")
                 print("Falling back to RealSense (if available) or exiting.")
                 # Fallback logic will be handled in self.initialize()
-                self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live')
+                self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
                 self.use_simulation = False # Revert flag as playback init will fail
         elif self.use_webcam:
             print("Using webcam mode as specified.")
@@ -227,12 +229,18 @@ class JugglingTracker:
                 camera_index=self.camera_index
             )
         elif self.use_realsense:
-            print("Using RealSense mode as specified.")
-            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live')
+            if self.depth_only:
+                print("Using RealSense mode in depth-only mode for cable compatibility.")
+            else:
+                print("Using RealSense mode as specified.")
+            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
         else:
             # Default to RealSense if no other mode is explicitly chosen by args
-            print("Defaulting to RealSense mode.")
-            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live')
+            if self.depth_only:
+                print("Defaulting to RealSense mode in depth-only mode for cable compatibility.")
+            else:
+                print("Defaulting to RealSense mode.")
+            self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
         
         # Initialize other modules
         self.depth_processor = DepthProcessor()
@@ -362,7 +370,7 @@ class JugglingTracker:
                 
                 if self.use_realsense:
                     print("Falling back to RealSense mode.")
-                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live')
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only)
                     if not self.frame_acquisition.initialize():
                         print("RealSense fallback failed. Trying Webcam.")
                         self.use_realsense = False; self.use_webcam = True
@@ -391,7 +399,7 @@ class JugglingTracker:
                 
                 if self.use_realsense:
                     print("Falling back to RealSense mode.")
-                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live')
+                    self.frame_acquisition = FrameAcquisition(width=640, height=480, mode='live', depth_only=self.depth_only)
                     if not self.frame_acquisition.initialize():
                         print("RealSense fallback failed. Trying Webcam.")
                         self.use_realsense = False; self.use_webcam = True
@@ -1004,13 +1012,13 @@ class JugglingTracker:
         elif not fallback and initial_use_realsense:
             print("Switching to RealSense (based on initial preference or direct switch).")
             self.frame_acquisition = FrameAcquisition(
-                width=default_width, height=default_height, mode='live'
+                width=default_width, height=default_height, mode='live', depth_only=self.depth_only
             )
             current_primary_mode_is_webcam = False
         else: # Default or fallback scenario: Try RealSense first, then Webcam
             print("Attempting RealSense as primary live mode (default or fallback).")
             self.frame_acquisition = FrameAcquisition(
-                width=default_width, height=default_height, mode='live'
+                width=default_width, height=default_height, mode='live', depth_only=self.depth_only
             )
             current_primary_mode_is_webcam = False # Tentatively
 
@@ -1038,7 +1046,7 @@ class JugglingTracker:
             elif current_primary_mode_is_webcam and (initial_use_realsense or fallback): # If explicit Webcam failed, and RealSense is an option
                  print("[DEBUG Roo] JugglingTracker.switch_to_live_mode: Webcam failed, trying RealSense fallback.") # Roo log
                  print("Webcam failed. Trying RealSense as fallback.")
-                 self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live')
+                 self.frame_acquisition = FrameAcquisition(width=default_width, height=default_height, mode='live', depth_only=self.depth_only)
                  realsense_fallback_init_success = self.frame_acquisition.initialize() # Roo log
                  print(f"[DEBUG Roo] JugglingTracker.switch_to_live_mode: RealSense fallback initialize() result: {realsense_fallback_init_success}") # Roo log
                  if not realsense_fallback_init_success:

@@ -7,7 +7,7 @@ This will help diagnose if frames are freezing or updating correctly.
 import cv2
 import time
 import numpy as np
-from color_only_frame_acquisition import ColorOnlyFrameAcquisition
+from core.camera.color_only_frame_acquisition import ColorOnlyFrameAcquisition
 
 def test_realsense_frames():
     """Test RealSense frame updates."""
