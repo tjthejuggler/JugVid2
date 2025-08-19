@@ -45,6 +45,8 @@ def main():
                        help='IMU connection timeout in seconds (default: 5)')
     parser.add_argument('--output-dir', type=str, default=None,
                        help='Custom output directory')
+    parser.add_argument('--label', type=str, default=None,
+                       help='Recording label to add to filenames (e.g., "cascade", "flash")')
     
     args = parser.parse_args()
     
@@ -145,7 +147,8 @@ def main():
         camera_fps=config['camera_fps'],
         enable_imu=not args.disable_imu,
         watch_ips=watch_ips,
-        manual_mode=config['manual_mode']
+        manual_mode=config['manual_mode'],
+        default_label=args.label
     )
     
     # Configure enhanced IMU if enabled

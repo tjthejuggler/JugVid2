@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ m#!/usr/bin/env python3
 """
 Stillness Recorder (Headless) - Motion-triggered video recorder without GUI
 
@@ -16,7 +16,7 @@ from datetime import datetime
 
 # Import our custom modules
 try:
-    from color_only_frame_acquisition import ColorOnlyFrameAcquisition
+    from core.camera.color_only_frame_acquisition import ColorOnlyFrameAcquisition
     REALSENSE_AVAILABLE = True
 except ImportError:
     REALSENSE_AVAILABLE = False

@@ -21,16 +21,17 @@ import os
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
+import queue
 
 # Import our custom modules
 try:
-    from color_only_frame_acquisition import ColorOnlyFrameAcquisition
+    from core.camera.color_only_frame_acquisition import ColorOnlyFrameAcquisition
     REALSENSE_AVAILABLE = True
 except ImportError:
     REALSENSE_AVAILABLE = False
     print("Warning: RealSense modules not available")
 
-from motion_detector import MotionDetector
+from core.motion.motion_detector import MotionDetector
 from core.motion.circular_frame_buffer import CircularFrameBuffer, FrameBufferRecorder
 from core.imu.watch_imu_manager import WatchIMUManager
 
@@ -51,8 +52,26 @@ class ControlsWindowWithIMU:
         self.right_watch_ip_var = None
         self.watch_status_labels = {}
         
+        # Recording label variable
+        self.recording_label_var = None
+        
+        # Threading support
+        self.gui_thread = None
+        self.command_queue = queue.Queue()
+        self.running = False
+        
     def create_window(self):
-        """Create the tkinter controls window with IMU controls."""
+        """Create the tkinter controls window with IMU controls in a separate thread."""
+        self.running = True
+        self.gui_thread = threading.Thread(target=self._run_gui_thread, daemon=True)
+        self.gui_thread.start()
+        
+        # Wait a moment for the GUI to initialize
+        time.sleep(0.5)
+        print("✓ Controls window started in separate thread")
+    
+    def _run_gui_thread(self):
+        """Run the GUI in a separate thread."""
         try:
             self.root = tk.Tk()
             self.root.title("Stillness Recorder with IMU Controls")
@@ -64,10 +83,23 @@ class ControlsWindowWithIMU:
             self.root.columnconfigure(0, weight=1)
             self.root.rowconfigure(0, weight=1)
             
-            print("✓ Controls window root created successfully")
+            self._create_gui_elements()
+            
+            # Set up periodic command processing
+            self.root.after(100, self._process_commands)
+            
+            print("✓ Controls window GUI thread initialized successfully")
+            
+            # Run the GUI main loop
+            self.root.mainloop()
+            
         except Exception as e:
-            print(f"✗ Error creating controls window root: {e}")
-            return
+            print(f"✗ Error in GUI thread: {e}")
+        finally:
+            self.running = False
+    
+    def _create_gui_elements(self):
+        """Create all GUI elements (runs in GUI thread)."""
         
         # Main frame with scrollable content
         main_frame = ttk.Frame(self.root, padding="5")
@@ -125,6 +157,16 @@ class ControlsWindowWithIMU:
         stillness_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Button(main_frame, text="Update",
                   command=self.update_stillness_duration).grid(row=current_row, column=2, padx=(10, 0), pady=5)
+        current_row += 1
+        
+        # Recording Label
+        ttk.Label(main_frame, text="Recording Label (optional):",
+                 font=("Arial", 11)).grid(row=current_row, column=0, sticky=tk.W, pady=5)
+        self.recording_label_var = tk.StringVar(value="")
+        label_entry = ttk.Entry(main_frame, textvariable=self.recording_label_var, width=20, font=("Arial", 10))
+        label_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
+        ttk.Label(main_frame, text="e.g., 'cascade', 'flash'",
+                 font=("Arial", 9), foreground="gray").grid(row=current_row, column=2, padx=(10, 0), pady=5)
         current_row += 1
         
         # Separator
@@ -260,6 +302,25 @@ class ControlsWindowWithIMU:
             print(f"✗ Error initializing controls window: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _process_commands(self):
+        """Process commands from the main thread (runs in GUI thread)."""
+        try:
+            while not self.command_queue.empty():
+                command, args = self.command_queue.get_nowait()
+                if command == "update_display":
+                    self._update_display_internal()
+                elif command == "destroy":
+                    self.root.quit()
+                    return
+        except queue.Empty:
+            pass
+        except Exception as e:
+            print(f"Warning: Command processing error: {e}")
+        
+        # Schedule next command processing
+        if self.running and self.root and self.root.winfo_exists():
+            self.root.after(100, self._process_commands)
     
     # Video control methods (same as original)
     def update_record_duration(self):
@@ -529,30 +590,25 @@ class ControlsWindowWithIMU:
             self.session_dir_label.config(text=f"Session Dir: {os.path.basename(self.recorder.session_dir)}")
     
     def schedule_update(self):
-        """Schedule the next display update."""
-        if self.root and self.root.winfo_exists():
-            self.update_display()
-            self.root.after(2000, self.schedule_update)  # Update every 2 seconds
+        """Schedule the next display update (no longer needed with threading)."""
+        pass  # Updates are now handled by periodic calls from main thread
     
     def process_events(self):
-        """Process tkinter events (call this from main loop)."""
-        try:
-            if self.root and self.root.winfo_exists():
-                self.root.update_idletasks()
-                return True
-        except tk.TclError:
-            self.root = None
-            return False
-        except Exception as e:
-            print(f"Warning: Tkinter process_events error: {e}")
-            self.root = None
-            return False
-        return False
+        """Process tkinter events (no longer needed with threading)."""
+        return self.running  # Just return if GUI thread is still running
     
     def destroy(self):
         """Destroy the tkinter window."""
-        if self.root:
-            self.root.destroy()
+        self.running = False
+        if self.running:
+            try:
+                self.command_queue.put(("destroy", None))
+            except:
+                pass
+        
+        # Wait for GUI thread to finish
+        if self.gui_thread and self.gui_thread.is_alive():
+            self.gui_thread.join(timeout=2.0)
 
 
 class StillnessRecorderWithIMU:
@@ -574,7 +630,8 @@ class StillnessRecorderWithIMU:
                  camera_fps=30,
                  enable_imu=True,
                  watch_ips=None,
-                 manual_mode=False):
+                 manual_mode=False,
+                 default_label=None):
         """Initialize the enhanced stillness recorder with IMU support."""
         
         # Initialize base recorder properties (same as original)
@@ -584,6 +641,7 @@ class StillnessRecorderWithIMU:
         self.stillness_duration = stillness_duration
         self.output_dir = output_dir
         self.manual_mode = manual_mode
+        self.default_label = default_label
         
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -1006,6 +1064,22 @@ class StillnessRecorderWithIMU:
                 session_timestamp = datetime.fromtimestamp(recording_start_time)
                 sync_id = session_timestamp.strftime("%Y%m%d_%H%M%S")
                 
+                # Get recording label from controls window or command line
+                recording_label = ""
+                label_text = ""
+                
+                # First try command line argument
+                if self.default_label:
+                    label_text = self.default_label.strip()
+                # Then try GUI input (if no command line label)
+                elif self.controls_window and self.controls_window.recording_label_var:
+                    label_text = self.controls_window.recording_label_var.get().strip()
+                
+                if label_text:
+                    # Sanitize label for filename (remove invalid characters)
+                    import re
+                    recording_label = "_" + re.sub(r'[^\w\-_]', '', label_text)
+                
                 # Start IMU recording (no duration limit - will be stopped manually)
                 if self.enable_imu and self.imu_manager:
                     print(f"🎬 Starting manual IMU recording with ID: {sync_id}")
@@ -1057,7 +1131,9 @@ class StillnessRecorderWithIMU:
                     
                     # Retrieve IMU data immediately with sync_id to same directory as video
                     print(f"📥 Retrieving IMU data with sync_id: {sync_id}")
-                    self.imu_manager.current_sync_id = sync_id
+                    # Set sync_id with label for IMU files
+                    imu_sync_id = f"{sync_id}{recording_label}"
+                    self.imu_manager.current_sync_id = imu_sync_id
                     self.imu_manager._retrieve_imu_data(target_dir=self.session_dir)
                 
                 if not recording_frames:
@@ -1066,7 +1142,9 @@ class StillnessRecorderWithIMU:
                     # Still try to save IMU data even if video failed
                     if self.enable_imu and self.imu_manager:
                         print(f"📥 Retrieving IMU data with sync_id: {sync_id}")
-                        self.imu_manager.current_sync_id = sync_id
+                        # Set sync_id with label for IMU files
+                        imu_sync_id = f"{sync_id}{recording_label}"
+                        self.imu_manager.current_sync_id = imu_sync_id
                         self.imu_manager._retrieve_imu_data(target_dir=self.session_dir)
                     return
                 
@@ -1074,7 +1152,7 @@ class StillnessRecorderWithIMU:
                 actual_duration = recording_frames[-1][0] - recording_frames[0][0] if recording_frames else 0
                 print(f"📊 Manual recording duration: {actual_duration:.2f} seconds")
                 
-                filename = f"manual_{sync_id}.mp4"
+                filename = f"manual_{sync_id}{recording_label}.mp4"
                 
             else:
                 # Automatic mode: use existing logic
@@ -1104,7 +1182,24 @@ class StillnessRecorderWithIMU:
                 # Generate synchronized filename
                 clip_start_time = datetime.fromtimestamp(recording_frames[0][0])
                 sync_id = clip_start_time.strftime("%Y%m%d_%H%M%S")
-                filename = f"auto_{sync_id}.mp4"
+                
+                # Get recording label from controls window or command line for automatic recordings too
+                recording_label = ""
+                label_text = ""
+                
+                # First try command line argument
+                if self.default_label:
+                    label_text = self.default_label.strip()
+                # Then try GUI input (if no command line label)
+                elif self.controls_window and self.controls_window.recording_label_var:
+                    label_text = self.controls_window.recording_label_var.get().strip()
+                
+                if label_text:
+                    # Sanitize label for filename (remove invalid characters)
+                    import re
+                    recording_label = "_" + re.sub(r'[^\w\-_]', '', label_text)
+                
+                filename = f"auto_{sync_id}{recording_label}.mp4"
             
             # Save video (IMU already handled above for manual mode)
             session_recorder = FrameBufferRecorder(self.session_dir)
@@ -1113,7 +1208,9 @@ class StillnessRecorderWithIMU:
             # For automatic mode, start IMU recording with duration
             if not manual and self.enable_imu and self.imu_manager:
                 print(f"🎬 Starting synchronized IMU recording session ({self.record_duration}s)")
-                imu_success = self.imu_manager.synchronized_recording_session(duration=self.record_duration, sync_id=sync_id)
+                # Use sync_id with label for IMU files
+                imu_sync_id = f"{sync_id}{recording_label}"
+                imu_success = self.imu_manager.synchronized_recording_session(duration=self.record_duration, sync_id=imu_sync_id)
             else:
                 imu_success = True  # Already handled for manual mode
             
