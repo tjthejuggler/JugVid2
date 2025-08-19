@@ -8,6 +8,14 @@ import queue
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+# Import RealSense for automatic camera initialization
+try:
+    import pyrealsense2 as rs
+    REALSENSE_AVAILABLE = True
+except ImportError:
+    REALSENSE_AVAILABLE = False
+    print("Warning: pyrealsense2 not available. RealSense auto-initialization disabled.")
+
 class JugVid2cppInterface:
     """
     Interface for the JugVid2cpp ball tracker with video streaming support.
@@ -19,11 +27,12 @@ class JugVid2cppInterface:
     - Providing both video frames and identified balls to juggling_tracker
     """
     
-    def __init__(self, 
+    def __init__(self,
                  executable_path: str = "/home/twain/Projects/JugVid2cpp/build/bin/ball_tracker",
                  color_to_profile_mapping: Optional[Dict[str, Dict]] = None,
                  default_radius_px: int = 15,
-                 synthetic_intrinsics: Optional[Dict] = None):
+                 synthetic_intrinsics: Optional[Dict] = None,
+                 auto_init_realsense: bool = True):
         """
         Initialize the JugVid2cpp interface.
         
@@ -32,6 +41,7 @@ class JugVid2cppInterface:
             color_to_profile_mapping: Mapping of JugVid2cpp color names to juggling_tracker profiles
             default_radius_px: Default radius in pixels for synthetic blobs
             synthetic_intrinsics: Synthetic camera intrinsics for coordinate conversion
+            auto_init_realsense: Whether to automatically initialize RealSense camera
         """
         self.executable_path = executable_path
         self.process = None
@@ -40,6 +50,12 @@ class JugVid2cppInterface:
         self.last_identified_balls = []
         self.last_video_frame = None
         self.mode = 'jugvid2cpp'  # Add mode attribute for compatibility
+        self.auto_init_realsense = auto_init_realsense
+        
+        # RealSense camera management
+        self.realsense_pipeline = None
+        self.realsense_config = None
+        self.realsense_initialized = False
         
         # Threading for non-blocking reads
         self.read_thread = None
@@ -84,6 +100,113 @@ class JugVid2cppInterface:
         self.max_consecutive_errors = 5
         self.error_state = False
         self.error_message = ""
+    
+    def _initialize_realsense_camera(self) -> bool:
+        """
+        Initialize the RealSense camera for JugVid2cpp.
+        
+        Returns:
+            bool: True if RealSense was initialized successfully, False otherwise
+        """
+        if not REALSENSE_AVAILABLE:
+            self.error_message = "RealSense library not available"
+            return False
+        
+        if self.realsense_initialized:
+            print("RealSense camera already initialized")
+            return True
+        
+        try:
+            print("🎥 Initializing RealSense camera for JugVid2cpp...")
+            
+            # Create pipeline and config
+            self.realsense_pipeline = rs.pipeline()
+            self.realsense_config = rs.config()
+            
+            # Configure streams - use standard resolution for JugVid2cpp
+            self.realsense_config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+            self.realsense_config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+            
+            # Start the pipeline
+            profile = self.realsense_pipeline.start(self.realsense_config)
+            
+            # Get device info
+            device = profile.get_device()
+            device_name = device.get_info(rs.camera_info.name)
+            device_serial = device.get_info(rs.camera_info.serial_number)
+            
+            print(f"✅ RealSense camera initialized: {device_name} (Serial: {device_serial})")
+            
+            # Wait a moment for camera to stabilize
+            time.sleep(2)
+            
+            # Test frame capture
+            frames = self.realsense_pipeline.wait_for_frames(timeout_ms=5000)
+            if frames:
+                print("✅ RealSense camera test frame captured successfully")
+                self.realsense_initialized = True
+                return True
+            else:
+                print("❌ Failed to capture test frame from RealSense")
+                self._cleanup_realsense()
+                return False
+                
+        except Exception as e:
+            print(f"❌ Failed to initialize RealSense camera: {e}")
+            self.error_message = f"RealSense initialization failed: {str(e)}"
+            self._cleanup_realsense()
+            return False
+    
+    def _cleanup_realsense(self):
+        """Clean up RealSense camera resources."""
+        try:
+            if self.realsense_pipeline:
+                self.realsense_pipeline.stop()
+                print("🎥 RealSense camera stopped")
+        except Exception as e:
+            print(f"Warning: Error stopping RealSense pipeline: {e}")
+        finally:
+            self.realsense_pipeline = None
+            self.realsense_config = None
+            self.realsense_initialized = False
+    
+    def _wait_for_realsense_availability(self, max_wait_seconds: int = 10) -> bool:
+        """
+        Wait for RealSense camera to become available.
+        
+        Args:
+            max_wait_seconds: Maximum time to wait for camera availability
+            
+        Returns:
+            bool: True if camera becomes available, False if timeout
+        """
+        if not REALSENSE_AVAILABLE:
+            return False
+        
+        print(f"🔍 Checking RealSense camera availability (max wait: {max_wait_seconds}s)...")
+        
+        start_time = time.time()
+        while time.time() - start_time < max_wait_seconds:
+            try:
+                # Try to enumerate devices
+                ctx = rs.context()
+                devices = ctx.query_devices()
+                
+                if len(devices) > 0:
+                    device = devices[0]
+                    device_name = device.get_info(rs.camera_info.name)
+                    print(f"✅ RealSense camera found: {device_name}")
+                    return True
+                else:
+                    print("⏳ No RealSense cameras detected, waiting...")
+                    time.sleep(1)
+                    
+            except Exception as e:
+                print(f"⏳ RealSense check failed: {e}, retrying...")
+                time.sleep(1)
+        
+        print(f"❌ RealSense camera not available after {max_wait_seconds}s")
+        return False
     
     def _decode_base64_image(self, base64_string: str) -> Optional[np.ndarray]:
         """Decode base64 string to OpenCV image."""
@@ -196,12 +319,32 @@ class JugVid2cppInterface:
     def start(self) -> bool:
         """
         Start the JugVid2cpp ball tracker process in streaming mode.
+        Automatically initializes RealSense camera if enabled.
         
         Returns:
             bool: True if started successfully, False otherwise
         """
         try:
-            # Start JugVid2cpp in streaming mode
+            # Step 1: Initialize RealSense camera if auto-initialization is enabled
+            if self.auto_init_realsense:
+                print("🎥 Auto-initializing RealSense camera for JugVid2cpp...")
+                
+                # Wait for RealSense to be available
+                if not self._wait_for_realsense_availability():
+                    self.error_state = True
+                    self.error_message = "RealSense camera not available"
+                    return False
+                
+                # Initialize RealSense
+                if not self._initialize_realsense_camera():
+                    self.error_state = True
+                    self.error_message = "Failed to initialize RealSense camera"
+                    return False
+                
+                print("✅ RealSense camera ready for JugVid2cpp")
+            
+            # Step 2: Start JugVid2cpp in streaming mode
+            print(f"🚀 Starting JugVid2cpp process: {self.executable_path}")
             self.process = subprocess.Popen(
                 [self.executable_path, "stream"],
                 stdout=subprocess.PIPE,
@@ -214,45 +357,57 @@ class JugVid2cppInterface:
             self.error_message = ""
             self.consecutive_errors = 0
             
-            # Start the reading thread
+            # Step 3: Start the reading thread
             self.stop_thread = False
             self.read_thread = threading.Thread(target=self._read_stream_thread, daemon=True)
             self.read_thread.start()
             
-            print(f"JugVid2cpp ball tracker started in streaming mode at {self.executable_path}")
+            print(f"✅ JugVid2cpp ball tracker started successfully in streaming mode")
             return True
             
         except FileNotFoundError:
-            print(f"Error: JugVid2cpp executable not found at {self.executable_path}")
+            print(f"❌ JugVid2cpp executable not found at {self.executable_path}")
             self.error_state = True
             self.error_message = f"Executable not found: {self.executable_path}"
+            self._cleanup_realsense()  # Clean up camera if it was initialized
             return False
         except Exception as e:
-            print(f"Error starting JugVid2cpp ball tracker: {e}")
+            print(f"❌ Error starting JugVid2cpp ball tracker: {e}")
             self.error_state = True
             self.error_message = f"Start error: {str(e)}"
+            self._cleanup_realsense()  # Clean up camera if it was initialized
             return False
     
     def stop(self):
-        """Stop the JugVid2cpp ball tracker process."""
-        self.stop_thread = True
+        """Stop the JugVid2cpp ball tracker process and clean up RealSense camera."""
+        print("🛑 Stopping JugVid2cpp interface...")
         
+        # Stop the reading thread
+        self.stop_thread = True
         if self.read_thread and self.read_thread.is_alive():
             self.read_thread.join(timeout=2)
         
+        # Stop the JugVid2cpp process
         if self.process and self.is_running:
             try:
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
+                    print("⚠️ JugVid2cpp process didn't terminate gracefully, forcing kill...")
                     self.process.kill()
                     self.process.wait(timeout=1)
             except Exception as e:
                 print(f"Error stopping JugVid2cpp process: {e}")
             finally:
                 self.is_running = False
-                print("JugVid2cpp ball tracker stopped")
+                print("✅ JugVid2cpp process stopped")
+        
+        # Clean up RealSense camera
+        if self.auto_init_realsense:
+            self._cleanup_realsense()
+        
+        print("✅ JugVid2cpp interface stopped completely")
     
     def get_frames(self) -> Tuple[None, None, None, Optional[np.ndarray]]:
         """
@@ -357,7 +512,10 @@ class JugVid2cppInterface:
             "consecutive_errors": self.consecutive_errors,
             "queue_size": self.frame_queue.qsize(),
             "last_frame_ball_count": len(self.last_frame_data),
-            "last_frame_timestamp": self.last_frame_data[0].get('timestamp', 0) if self.last_frame_data else 0
+            "last_frame_timestamp": self.last_frame_data[0].get('timestamp', 0) if self.last_frame_data else 0,
+            "realsense_initialized": self.realsense_initialized,
+            "auto_init_realsense": self.auto_init_realsense,
+            "realsense_available": REALSENSE_AVAILABLE
         }
     
     def print_timestamped_balls(self, identified_balls: List[Dict]) -> None:

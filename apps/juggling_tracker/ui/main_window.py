@@ -768,11 +768,20 @@ class MainWindow(QMainWindow):
     def _draw_tracked_balls(self, painter, tracked_balls_for_display, color_image):
         """Draw tracked balls on the painter."""
         for ball_info in tracked_balls_for_display:
-            # Extract ball information
-            pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
-            radius = int(ball_info['radius_px'])
-            ball_name = ball_info['name']
-            ball_id_display = ball_info['id']
+            # Extract ball information - handle both JugVid2cpp and regular tracking formats
+            if 'position_2d' in ball_info:
+                # Regular tracking format
+                pos_x, pos_y = int(ball_info['position_2d'][0]), int(ball_info['position_2d'][1])
+            elif 'x' in ball_info and 'y' in ball_info:
+                # JugVid2cpp format
+                pos_x, pos_y = int(ball_info['x']), int(ball_info['y'])
+            else:
+                # Skip if no position data available
+                continue
+            
+            radius = int(ball_info.get('radius_px', ball_info.get('radius', 20)))  # Default radius if not available
+            ball_name = ball_info.get('name', f"Ball_{ball_info.get('id', 'Unknown')}")
+            ball_id_display = ball_info.get('id', 'Unknown')
             
             # Skip drawing if position is outside the visible area
             if self.show_depth and pos_x >= color_image.shape[1]:
@@ -1882,6 +1891,10 @@ class MainWindow(QMainWindow):
                     self.status_bar.showMessage("Failed to initialize JugVid2cpp. Check that the executable is available.", 5000)
             else:
                 self.status_bar.showMessage("JugVid2cpp integration not available.", 3000)
+        
+        # Manage 3D ball tracker feed based on mode
+        self._ensure_3d_ball_tracker_feed_on_mode_switch()
+        
         self.update_recording_controls_state() # Update recording button states based on new mode
 
     def select_video_file(self):
@@ -2074,6 +2087,9 @@ class MainWindow(QMainWindow):
         
         # Show/hide JugVid2cpp status panel based on current mode
         self.jugvid2cpp_group.setVisible(self.current_feed_mode == "jugvid2cpp")
+        
+        # Manage 3D ball tracker feed based on synced mode
+        self._ensure_3d_ball_tracker_feed_on_mode_switch()
     
     # Watch IMU Methods
     
@@ -2594,6 +2610,9 @@ class MainWindow(QMainWindow):
                 ball_count = status.get('last_frame_ball_count', 0)
                 queue_size = status.get('queue_size', 0)
                 
+                # Update 3D ball tracker feed with latest ball data
+                self._update_3d_ball_tracker_feed()
+                
                 if ball_count > 0:
                     # Get actual ball data for display
                     if hasattr(self.app.frame_acquisition, 'get_identified_balls'):
@@ -2748,3 +2767,53 @@ class MainWindow(QMainWindow):
                 fps_data[feed_id] = self.video_feed_manager.feeds[feed_id].get_fps()
         
         return fps_data
+    
+    def _update_3d_ball_tracker_feed(self):
+        """Update the 3D ball tracker feed with latest ball data from JugVid2cpp."""
+        try:
+            # Only update if we're in JugVid2cpp mode
+            if self.current_feed_mode != "jugvid2cpp":
+                return
+            
+            # Ensure we have a 3D ball tracker feed
+            ball_3d_feeds = self.video_feed_manager.get_ball_3d_feeds()
+            if not ball_3d_feeds:
+                # Create the 3D ball tracker feed
+                feed_id = self.video_feed_manager.add_ball_3d_feed("🎯 3D Ball Tracker", "ball_3d_main")
+                print(f"Created 3D ball tracker feed: {feed_id}")
+            else:
+                feed_id = ball_3d_feeds[0]  # Use the first 3D ball tracker feed
+            
+            # Get ball data from JugVid2cpp interface
+            if (hasattr(self.app, 'frame_acquisition') and
+                hasattr(self.app.frame_acquisition, 'get_identified_balls')):
+                
+                identified_balls = self.app.frame_acquisition.get_identified_balls()
+                
+                # Update the 3D ball tracker feed with the latest ball data
+                self.video_feed_manager.update_ball_3d_feed(feed_id, identified_balls)
+                
+        except Exception as e:
+            print(f"Error updating 3D ball tracker feed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _ensure_3d_ball_tracker_feed_on_mode_switch(self):
+        """Ensure 3D ball tracker feed is created when switching to JugVid2cpp mode."""
+        try:
+            if self.current_feed_mode == "jugvid2cpp":
+                # Check if we already have a 3D ball tracker feed
+                ball_3d_feeds = self.video_feed_manager.get_ball_3d_feeds()
+                if not ball_3d_feeds:
+                    # Create the 3D ball tracker feed
+                    feed_id = self.video_feed_manager.add_ball_3d_feed("🎯 3D Ball Tracker", "ball_3d_main")
+                    print(f"Created 3D ball tracker feed for JugVid2cpp mode: {feed_id}")
+            else:
+                # Remove 3D ball tracker feeds when not in JugVid2cpp mode
+                ball_3d_feeds = self.video_feed_manager.get_ball_3d_feeds()
+                for feed_id in ball_3d_feeds:
+                    self.video_feed_manager.remove_feed(feed_id)
+                    print(f"Removed 3D ball tracker feed: {feed_id}")
+                    
+        except Exception as e:
+            print(f"Error managing 3D ball tracker feed on mode switch: {e}")

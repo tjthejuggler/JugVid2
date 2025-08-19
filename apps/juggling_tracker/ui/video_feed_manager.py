@@ -8,8 +8,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QPen, QColor
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
-# Import the IMU feed widget
+# Import the IMU feed widget and 3D ball tracker widget
 from .imu_feed_widget import IMUFeedWidget
+from .ball_3d_feed_widget import Ball3DFeedWidget
 
 class VideoFeedWidget(QFrame):
     """
@@ -161,12 +162,12 @@ class VideoFeedManager(QWidget):
         
     def add_feed(self, feed_name="Feed", feed_id=None, feed_type="video"):
         """
-        Add a new video or IMU feed.
+        Add a new video, IMU, or 3D ball tracker feed.
         
         Args:
             feed_name (str): Display name for the feed
             feed_id (str, optional): Unique ID for the feed. If None, auto-generated.
-            feed_type (str): Type of feed - 'video' or 'imu'
+            feed_type (str): Type of feed - 'video', 'imu', or 'ball_3d'
             
         Returns:
             str: The feed ID
@@ -196,6 +197,8 @@ class VideoFeedManager(QWidget):
                         break
             
             feed_widget = IMUFeedWidget(feed_id, feed_name, watch_name, self)
+        elif feed_type == "ball_3d":
+            feed_widget = Ball3DFeedWidget(feed_id, feed_name, self)
         else:
             feed_widget = VideoFeedWidget(feed_id, feed_name, self)
         
@@ -287,13 +290,16 @@ class VideoFeedManager(QWidget):
         
         Args:
             feed_id (str): ID of the feed to update
-            data: New data - QPixmap for video feeds, dict for IMU feeds
+            data: New data - QPixmap for video feeds, dict for IMU feeds, list for ball_3d feeds
         """
         if feed_id in self.feeds:
             feed_type = self.feed_types.get(feed_id, "video")
             if feed_type == "imu":
                 # Update IMU feed with sensor data
                 self.feeds[feed_id].update_imu_data(data)
+            elif feed_type == "ball_3d":
+                # Update 3D ball tracker feed with ball data
+                self.feeds[feed_id].update_ball_data(data)
             else:
                 # Update video feed with pixmap
                 self.feeds[feed_id].update_frame(data)
@@ -426,6 +432,15 @@ class VideoFeedManager(QWidget):
         """
         return [feed_id for feed_id, feed_type in self.feed_types.items() if feed_type == "video"]
     
+    def get_ball_3d_feeds(self):
+        """
+        Get all 3D ball tracker feed IDs.
+        
+        Returns:
+            list: List of 3D ball tracker feed IDs
+        """
+        return [feed_id for feed_id, feed_type in self.feed_types.items() if feed_type == "ball_3d"]
+    
     def clear_imu_feed_data(self, feed_id):
         """
         Clear data from an IMU feed.
@@ -462,3 +477,91 @@ class VideoFeedManager(QWidget):
                 imu_widget.set_value_ranges(accel_range, gyro_range)
         else:
             print(f"Warning: Attempted to configure non-existent or non-IMU feed: {feed_id}")
+    
+    def add_ball_3d_feed(self, feed_name="3D Ball Tracker", feed_id=None):
+        """
+        Convenience method to add a 3D ball tracker feed.
+        
+        Args:
+            feed_name (str): Display name for the feed
+            feed_id (str, optional): Unique ID for the feed. If None, auto-generated.
+            
+        Returns:
+            str: The feed ID
+        """
+        if feed_id is None:
+            feed_id = f"ball_3d_{self.feed_counter}"
+            self.feed_counter += 1
+            
+        if feed_id in self.feeds:
+            print(f"Warning: 3D Ball Tracker Feed {feed_id} already exists")
+            return feed_id
+            
+        # Create 3D ball tracker feed widget
+        feed_widget = Ball3DFeedWidget(feed_id, feed_name, self)
+        self.feeds[feed_id] = feed_widget
+        self.feed_types[feed_id] = "ball_3d"
+        
+        # Update layout
+        self._update_layout()
+        
+        # Show container if this is the first feed
+        if len(self.feeds) == 1:
+            self.feeds_container.setVisible(True)
+            
+        self.feeds_changed.emit(len(self.feeds))
+        print(f"Added 3D ball tracker feed: {feed_id} ({feed_name})")
+        return feed_id
+        
+    def update_ball_3d_feed(self, feed_id, ball_data):
+        """
+        Convenience method to update a 3D ball tracker feed with ball data.
+        
+        Args:
+            feed_id (str): ID of the 3D ball tracker feed to update
+            ball_data (list): List of ball data dictionaries with 3D positions
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "ball_3d":
+            self.feeds[feed_id].update_ball_data(ball_data)
+        else:
+            print(f"Warning: Attempted to update non-existent or non-3D ball tracker feed: {feed_id}")
+            
+    def clear_ball_3d_feed_data(self, feed_id):
+        """
+        Clear data from a 3D ball tracker feed.
+        
+        Args:
+            feed_id (str): ID of the 3D ball tracker feed to clear
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "ball_3d":
+            self.feeds[feed_id].clear_data()
+        else:
+            print(f"Warning: Attempted to clear non-existent or non-3D ball tracker feed: {feed_id}")
+    
+    def configure_ball_3d_feed_settings(self, feed_id, x_range=None, y_range=None, z_range=None,
+                                       ball_colors=None, size_range=None):
+        """
+        Configure settings for a 3D ball tracker feed.
+        
+        Args:
+            feed_id (str): ID of the 3D ball tracker feed
+            x_range (tuple, optional): (min, max) for X-axis in meters
+            y_range (tuple, optional): (min, max) for Y-axis in meters
+            z_range (tuple, optional): (min, max) for Z-axis in meters
+            ball_colors (dict, optional): Ball color mapping
+            size_range (tuple, optional): (min_radius, max_radius) for depth visualization
+        """
+        if feed_id in self.feeds and self.feed_types.get(feed_id) == "ball_3d":
+            ball_3d_widget = self.feeds[feed_id]
+            
+            if x_range or y_range or z_range:
+                ball_3d_widget.set_3d_bounds(x_range, y_range, z_range)
+            
+            if ball_colors:
+                ball_3d_widget.set_ball_colors(ball_colors)
+            
+            if size_range:
+                min_radius, max_radius = size_range
+                ball_3d_widget.set_size_range(min_radius, max_radius)
+        else:
+            print(f"Warning: Attempted to configure non-existent or non-3D ball tracker feed: {feed_id}")

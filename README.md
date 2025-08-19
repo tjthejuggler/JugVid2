@@ -62,6 +62,7 @@ A robust juggling ball tracking system using Intel RealSense depth cameras, now 
 - **Automatic Resizing**: Window and UI elements adjust dynamically based on feed count
 - **Feed Management API**: Add, remove, and configure feeds programmatically
 - **Performance Optimized**: Efficient rendering and memory management for smooth operation
+- **3D Ball Tracker Feed**: Dedicated feed type for real-time 3D ball visualization with JugVid2cpp integration
 
 **🚀 NEW: IMU Feed Visualization System (2025-08-18):**
 - **Real-time IMU Graphs**: Live visualization of accelerometer and gyroscope data as scrolling line graphs
@@ -71,7 +72,7 @@ A robust juggling ball tracking system using Intel RealSense depth cameras, now 
 - **Auto-scaling Graphs**: Dynamic range adjustment based on recent data patterns
 - **Performance Monitoring**: FPS and latency tracking for each IMU feed
 - **Automatic Feed Management**: IMU feeds created automatically when watch data becomes available
-- **Unified Interface**: Same layout system handles both video (QPixmap) and IMU (dict) data types
+- **Unified Interface**: Same layout system handles video (QPixmap), IMU (dict), and 3D ball tracker (list) data types
 
 **Features:**
 - Real-time juggling ball tracking using color and depth data.
@@ -91,7 +92,7 @@ A robust juggling ball tracking system using Intel RealSense depth cameras, now 
     - The application can play back standard video files (e.g., .mp4, .avi) as a simulated live feed. This is useful for testing tracking algorithms without a live camera.
     - To use, select "Recorded Feed (Video)" from the "Feed Source" panel and choose a video file. The video will loop automatically.
     - Note: Standard video files do not contain depth data, so depth-dependent features will be limited in this mode.
-- **JugVid2cpp 3D Tracking Mode** ⭐ ENHANCED GUI Integration!:
+- **JugVid2cpp 3D Tracking Mode** ⭐ ENHANCED GUI Integration with 3D Visualization & Automatic RealSense!:
     - Integration with the high-performance JugVid2cpp C++ ball tracker for superior 3D tracking performance.
     - Provides direct 3D ball positions at up to 90 FPS without traditional computer vision pipeline overhead.
     - Tracks pink, orange, green, and yellow balls using optimized color-based detection.
@@ -100,9 +101,15 @@ A robust juggling ball tracking system using Intel RealSense depth cameras, now 
     - **🚀 NEW: Visual Feedback**: Color-coded status indicators (green=connected, red=error, gray=inactive)
     - **🚀 NEW: Error Handling**: Automatic fallback to live camera mode if JugVid2cpp fails to initialize
     - **🚀 NEW: Live Ball Data**: Real-time display of tracked balls with 3D coordinates (X, Y, Z positions)
+    - **🚀 NEW: 3D Ball Visualization Feed**: Dedicated 3D visualization feed showing balls as colored circles with depth representation
+    - **🚀 NEW: Automatic Feed Management**: 3D ball tracker feed automatically created/removed when switching to/from JugVid2cpp mode
+    - **🚀 NEW: Real-time 3D Rendering**: X/Y coordinates mapped to screen position, Z-depth represented by circle size
+    - **🚀 NEW: Automatic RealSense Initialization**: RealSense camera automatically initialized when switching to JugVid2cpp mode - no manual button required!
+    - **🚀 NEW: Smart Camera Management**: Automatic camera availability detection, initialization, and cleanup with comprehensive error handling
+    - **🚀 NEW: Zero Manual Setup**: Simply select JugVid2cpp mode from GUI - camera setup is completely automatic
     - To use: Select from GUI dropdown or use `--jugvid2cpp` command line option.
     - Requires JugVid2cpp to be built and available at `/home/twain/Projects/JugVid2cpp/build/bin/ball_tracker`.
-    - _(Added: 2025-08-16, GUI Integration completed: 2025-08-18)_
+    - _(Added: 2025-08-16, GUI Integration completed: 2025-08-18, 3D Visualization added: 2025-08-18, Auto RealSense: 2025-08-18)_
 - **RealSense BAG File Recording**:
     - The application can record color and depth streams from a connected RealSense camera into a `.bag` file.
     - This allows capturing full sensor data for later analysis or playback (Note: Direct playback of `.bag` files with depth data within this application is a potential future enhancement).
@@ -974,16 +981,25 @@ python apps/juggling_tracker/run_juggling_tracker.py --simulation --video-path v
 python apps/juggling_tracker/run_juggling_tracker.py --jugvid2cpp --watch-ips 10.200.169.205
 ```
 
-**🚀 NEW: JugVid2cpp GUI Usage (2025-08-18):**
+**🚀 NEW: JugVid2cpp GUI Usage with Automatic RealSense (2025-08-18):**
 1. **Launch Application**: `python apps/juggling_tracker/run_juggling_tracker.py`
 2. **Select Mode**: Choose "JugVid2cpp 3D Tracking" from the "Feed Source" dropdown
-3. **Monitor Status**: Watch the "JugVid2cpp 3D Tracking Status" panel for:
+3. **Automatic Setup**: The system automatically:
+   - Detects RealSense camera availability (waits up to 10 seconds)
+   - Initializes RealSense camera with proper configuration (640x480 @ 30fps)
+   - Starts JugVid2cpp process in streaming mode
+   - Creates 3D ball visualization feed
+4. **Monitor Status**: Watch the "JugVid2cpp 3D Tracking Status" panel for:
    - Connection status (Connected/Error/Not Running)
    - Real-time ball tracking data with 3D coordinates
+   - RealSense initialization status
    - Error messages if initialization fails
    - Data processing queue status
-4. **Automatic Fallback**: If JugVid2cpp fails, the system automatically reverts to live camera mode
-5. **Troubleshooting**: Check status panel error messages for specific issues (executable not found, etc.)
+5. **Automatic Fallback**: If JugVid2cpp or RealSense fails, the system automatically reverts to live camera mode
+6. **Troubleshooting**: Check status panel error messages for specific issues:
+   - "RealSense camera not available" - Check USB connection
+   - "Executable not found" - Verify JugVid2cpp build path
+   - "RealSense initialization failed" - Try unplugging/reconnecting camera
 
 #### Face Balance Timer
 **Using Launcher (Recommended):**
@@ -1084,8 +1100,10 @@ python tools/debug/debug_imu_performance.py  # Direct usage
 -   `video_feed_manager`: Dynamic multi-feed layout system with latency monitoring.
 -   `video_feed_widget`: Individual feed display widget with performance metrics.
 -   `imu_feed_widget`: Real-time IMU data visualization widget with scrolling graphs.
+-   `ball_3d_feed_widget`: 3D ball tracker visualization widget with real-time 3D rendering.
 -   `test_video_feed_system`: Comprehensive test suite for the video feed system.
 -   `test_imu_feeds`: Comprehensive test suite for the IMU feed visualization system.
+-   `test_3d_ball_tracker_integration`: Comprehensive test suite for 3D ball tracker integration.
 
 ### Stillness Recorder Modules
 -   `motion_detector`: Advanced motion detection using background subtraction and frame differencing.
